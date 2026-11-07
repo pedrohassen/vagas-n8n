@@ -10,7 +10,7 @@ Ligar o PC depois de já ter recebido a mensagem do dia gera outra mensagem. É 
 
 **Para demonstração:** além do Discord, cada execução grava uma página HTML (`saida/vagas-AAAA-MM-DD_HHMM.html`) com a lista de vagas ou "nenhuma vaga nova". Dá para abrir no navegador na apresentação sem abrir o Discord.
 
-Além do arquivo com data e hora, toda execução também grava (e sobrescreve) `saida/spider-man-ultimas-vagas.html` (com `TEMA=neutro`, `saida/ultimas-vagas.html`). Abra esse arquivo uma vez e salve nos favoritos do navegador: a página **recarrega sozinha a cada 10 segundos**, então ao disparar o workflow no n8n ela mostra o resultado novo sem você abrir nada.
+Além do arquivo com data e hora, toda execução também grava (e sobrescreve) `saida/spider-man-ultimas-vagas.html` (com `TEMA=neutro`, `saida/ultimas-vagas.html`). Abra esse arquivo uma vez e salve nos favoritos do navegador: a página **não se atualiza sozinha** (o recarregamento automático foi retirado porque o navegador perdia o filtro e a página escolhidos). Depois de rodar o workflow, clique em **Atualizar** no topo da página (ou aperte F5): o filtro e a página em que você estava são mantidos.
 
 ### Como abrir a página de vagas (e salvar o favorito)
 A página é um arquivo comum da pasta `saida/`: não precisa de servidor. Escolha **uma** das formas (a 1 é a mais simples):
