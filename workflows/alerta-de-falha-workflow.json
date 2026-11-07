@@ -1,0 +1,196 @@
+{
+  "name": "Vagas de emprego - alerta de falha",
+  "nodes": [
+    {
+      "id": "e1",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "e2",
+      "name": "Avisar no Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ embeds: [{ author: Object.assign({ name: 'Spider-Man' }, $env.DISCORD_AVATAR_URL ? { icon_url: $env.DISCORD_AVATAR_URL } : {}), color: 14825014, description: '🕸️ Oh não! Meu atirador de teia falhou!\\nO workflow \"' + $json.workflow.name + '\" parou no nó ' + $json.execution.lastNodeExecuted + '.\\nErro: ' + $json.execution.error.message }] }) }}",
+        "options": {}
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "e3",
+      "name": "Montar página de alerta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        180
+      ],
+      "parameters": {
+        "jsCode": "// Monta a página de alertas: registro das últimas falhas, a mais recente primeiro.\n// Vem do Error Trigger (nome do workflow, nó onde parou, mensagem de erro) ou do gatilho\n// manual, que só redesenha a página com o que já está registrado.\nconst FUSO = 'America/Sao_Paulo'; // fuso das datas e horas (o servidor do n8n usa UTC)\nconst MAX_FALHAS = 50;            // quantas falhas a página lembra\nconst e = $input.first().json;\n\nconst esc = (s) => String(s ?? '').replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[c]));\nconst formata = (iso) => new Date(iso).toLocaleString('pt-BR', { timeZone: FUSO });\n\n// --- registro: fica na memória do workflow de alerta ---\nconst store = $getWorkflowStaticData('global');\nstore.falhas = store.falhas || [];\nif (e.execution) { // só o Error Trigger traz \"execution\"; o gatilho manual não registra nada\n  store.falhas.unshift({\n    quando: new Date().toISOString(),\n    workflow: e.workflow?.name ?? 'workflow desconhecido',\n    no: e.execution.lastNodeExecuted ?? 'nó desconhecido',\n    erro: e.execution.error?.message ?? 'erro sem mensagem',\n  });\n  store.falhas = store.falhas.slice(0, MAX_FALHAS);\n}\nconst falhas = store.falhas;\n\nconst cartoes = falhas.map((f) => `\n    <li class=\"cartao\">\n      <p class=\"quando\">${esc(formata(f.quando))}</p>\n      <dl>\n        <dt>Workflow</dt><dd>${esc(f.workflow)}</dd>\n        <dt>Parou no nó</dt><dd>${esc(f.no)}</dd>\n        <dt>Erro</dt><dd><pre>${esc(f.erro)}</pre></dd>\n      </dl>\n    </li>`).join('');\n\nconst conteudo = falhas.length\n  ? `<ul class=\"lista\">${cartoes}\\n  </ul>`\n  : '<p class=\"vazio\">Nenhuma falha registrada.</p>';\n\nconst html = `<!doctype html>\n<html lang=\"pt-BR\">\n<head>\n<meta charset=\"utf-8\">\n<meta http-equiv=\"refresh\" content=\"10\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Meu Sentido de Aranha — alertas</title>\n<style>\n  :root { color-scheme: light dark; --bg: #f6f6f4; --card: #ffffff; --texto: #14161a; --suave: #5b6068; --borda: #dcdcd6; --vermelho: #c8102e; --azul: #1b3a8c; }\n  @media (prefers-color-scheme: dark) { :root { --bg: #101114; --card: #1a1c21; --texto: #f2f2f0; --suave: #a3a8b0; --borda: #2c2f36; --vermelho: #ff5a62; --azul: #8fb0ff; } }\n  * { box-sizing: border-box; }\n  body { margin: 0; background: var(--bg); color: var(--texto); font-family: \"Segoe UI\", system-ui, -apple-system, sans-serif; line-height: 1.5; }\n  main { max-width: 860px; margin: 0 auto; padding: 2rem 1rem 3rem; }\n  header { border-bottom: 4px solid var(--vermelho); padding-bottom: 1rem; margin-bottom: 1.5rem; }\n  h1 { margin: 0; font-family: \"Arial Black\", \"Segoe UI Black\", system-ui, sans-serif; font-size: clamp(1.6rem, 5vw, 2.4rem); text-transform: uppercase; letter-spacing: .02em; line-height: 1.1; }\n  .sub { margin: .4rem 0 0; color: var(--suave); }\n  .sub a { color: var(--azul); font-weight: 700; }\n  .sub a:focus-visible { outline: 3px solid var(--vermelho); outline-offset: 2px; }\n  .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: .75rem; }\n  .cartao { background: var(--card); border: 1px solid var(--borda); border-left: 6px solid var(--vermelho); border-radius: 8px; padding: 1rem 1.25rem; }\n  .quando { margin: 0 0 .5rem; font-weight: 800; }\n  dt { color: var(--suave); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; margin-top: .6rem; }\n  dd { margin: .1rem 0 0; font-weight: 600; }\n  pre { margin: .1rem 0 0; white-space: pre-wrap; word-break: break-word; font-family: Consolas, \"Courier New\", monospace; font-size: .95rem; font-weight: 400; }\n  .vazio { background: var(--card); border: 1px solid var(--borda); border-radius: 8px; padding: 2rem 1rem; text-align: center; color: var(--suave); }\n  footer { margin-top: 1.5rem; color: var(--suave); font-size: .9rem; }\n</style>\n</head>\n<body>\n<main>\n  <header>\n    <h1>Alertas</h1>\n    <p class=\"sub\">Registro de falhas &middot; atualizado em ${esc(formata(new Date().toISOString()))} &middot; <a href=\"spider-man-ultimas-vagas.html\">Voltar às vagas</a></p>\n  </header>\n  ${conteudo}\n  <footer>Detalhes de cada execução: abra o n8n e vá em Executions.</footer>\n</main>\n</body>\n</html>`;\n\nreturn [{ json: { html } }];\n"
+      }
+    },
+    {
+      "id": "e4",
+      "name": "Converter em arquivo",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        180
+      ],
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "html",
+        "binaryPropertyName": "data",
+        "options": {
+          "fileName": "alerta.html"
+        }
+      }
+    },
+    {
+      "id": "e5",
+      "name": "Salvar página de alertas",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        780,
+        180
+      ],
+      "parameters": {
+        "operation": "write",
+        "fileName": "/home/node/.n8n-files/spider-man-alertas.html",
+        "dataPropertyName": "data",
+        "options": {}
+      }
+    },
+    {
+      "id": "e6",
+      "name": "Gerar página de alertas",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        180
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "e7",
+      "name": "Discord configurado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "e7-cond",
+              "leftValue": "={{ $env.DISCORD_WEBHOOK_URL }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Discord configurado?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Montar página de alerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar página de alerta": {
+      "main": [
+        [
+          {
+            "node": "Converter em arquivo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Converter em arquivo": {
+      "main": [
+        [
+          {
+            "node": "Salvar página de alertas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar página de alertas": {
+      "main": [
+        [
+          {
+            "node": "Montar página de alerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discord configurado?": {
+      "main": [
+        [
+          {
+            "node": "Avisar no Discord",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

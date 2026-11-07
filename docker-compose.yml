@@ -1,0 +1,20 @@
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    container_name: n8n
+    restart: unless-stopped          # sobe sozinho quando o Docker abrir
+    ports:
+      - "127.0.0.1:5678:5678"        # só este PC acessa (os botões "Ver fila"/"Enviar fila agora" são links do n8n)
+    environment:
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Sao_Paulo}
+      - TZ=${GENERIC_TIMEZONE:-America/Sao_Paulo}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - DISCORD_AVATAR_URL=${DISCORD_AVATAR_URL:-}
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false   # deixa as expressões lerem $env.DISCORD_WEBHOOK_URL
+      - NODE_FUNCTION_ALLOW_BUILTIN=zlib     # o parser do Indeed descompacta os links de e-mail "match" (require('zlib'))
+    volumes:
+      - n8n_data:/home/node/.n8n             # fluxos, credenciais e memória de vagas já enviadas
+      - ./saida:/home/node/.n8n-files        # páginas HTML geradas (demonstração)
+
+volumes:
+  n8n_data:
