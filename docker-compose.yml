@@ -10,6 +10,7 @@ services:
       - TZ=${GENERIC_TIMEZONE:-America/Sao_Paulo}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
       - DISCORD_AVATAR_URL=${DISCORD_AVATAR_URL:-}
+      - TEMA=${TEMA:-aranha}                 # identidade das mensagens e páginas: aranha (padrão) ou neutro
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false   # deixa as expressões lerem $env.DISCORD_WEBHOOK_URL
       - NODE_FUNCTION_ALLOW_BUILTIN=zlib     # o parser do Indeed descompacta os links de e-mail "match" (require('zlib'))
     volumes:
