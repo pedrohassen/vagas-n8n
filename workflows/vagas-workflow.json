@@ -194,7 +194,7 @@
         220
       ],
       "parameters": {
-        "numberInputs": 4
+        "numberInputs": 3
       }
     },
     {
@@ -207,7 +207,7 @@
         220
       ],
       "parameters": {
-        "jsCode": "// ===== COMO O FILTRO DECIDE =====\n// Antes de tudo: vaga velha demais (idade_maxima_dias) ou já enviada antes (mesmo id, ou mesma empresa+título) é ignorada.\n// Vagas de e-mail chegam prontas da fila (os parsers de cada site extraem no começo do fluxo); as das APIs são normalizadas aqui.\n// Depois, a função score() aplica as regras abaixo, NESTA ordem (a primeira que barrar descarta a vaga):\n//  1. Senioridade excluída no título ..... (senioridade_excluida: estágio, sênior, lead...) descarta. Nem \"Júnior\" nem palavra\n//                                          prioritária salvam; para voltar a receber estágio, tire as palavras desse campo.\n//  2. Outra profissão no título .......... (palavras_bloqueadas_no_titulo: devops, qa, sales...) descarta,\n//                                          a não ser que o título tenha uma palavra de palavras_prioritarias.\n//                                          Ex.: para começar a aplicar para QA, ponha \"qa\" em palavras_prioritarias.\n//  3. Stack indesejada no título ......... (palavras_bloqueadas_stack: java, php...) descarta, a não ser que:\n//                                          - tenha palavra prioritária: passa normal; ou\n//                                          - tenha \"Júnior\"/\"Jr\": passa \"COM RESSALVAS\" (aviso ⚠️ no Discord e na página).\n//  4. Vaga de API sem palavra de cargo ... (palavras_do_cargo) descarta. Vaga de e-mail e palavra prioritária já contam como cargo.\n//  5. Local .............................. se a vaga traz local e ele não está em locais_aceitos, descarta\n//                                          (exceto quando o parser do site marca localConfiavel).\n//  6. Nota de 0 a 10 ..................... pesos nas constantes PESO_* e PENAL_* logo abaixo; os limites de anos de experiência\n//                                          (anos_muito_alto, anos_alto, anos_baixo) vêm das Configurações. Abaixo de nota_minima: descarta.\n// Vaga \"com ressalvas\" aparece depois das normais, com o motivo, para você decidir ao clicar.\n// A nota é heurística (palavras e limites do nó \"Configurações\", pesos nas constantes abaixo), não IA.\n\n// ===== CONFIGURAÇÕES =====\n// Três camadas de ajuste:\n//  - PERFIL (muda com você): palavras, nota mínima, tecnologias, anos de experiência -> nó \"Configurações\", sem mexer aqui.\n//  - REGRA DE NEGÓCIO (como a nota é calculada, limites do sistema) -> as constantes logo abaixo. Só muda se a fórmula mudar.\n//  - AMBIENTE (muda com a máquina): fuso e URL do Discord -> arquivo .env.\nconst FUSO = $env.GENERIC_TIMEZONE || 'America/Sao_Paulo'; // fuso das datas e horas: vem do .env (GENERIC_TIMEZONE); sem ele, Brasília\nconst MAX_CHARS = 3500;           // tamanho máximo de cada mensagem (a descrição de um embed aceita até 4096)\nconst SEEN_TTL_DAYS = 60;         // por quanto tempo lembrar de vagas já enviadas\n// ⚠️ NÃO MEXA NOS PESOS ABAIXO SEM ENTENDER: um depende do outro e da nota_minima (quadro completo no README).\n//   - PESO_CARGO + PESO_JUNIOR precisa ser >= nota_minima (senão vaga de API com palavra prioritária nunca passa).\n//   - PESO_EMAIL precisa ser < nota_minima (senão toda vaga de e-mail passa, mesmo sem palavra de cargo).\n//   - PENAL_ANOS_MUITO_ALTO precisa ser forte o bastante para derrubar a nota abaixo de nota_minima.\n//   - TETO_TECNOLOGIAS: não suba muito nem desça abaixo de 2. BONUS_ANOS_BAIXO: mantenha pequeno.\n// Para receber mais ou menos vagas, mude a nota_minima (em Configurações), não os pesos.\n// Pesos da nota (regra de negócio):\nconst PESO_EMAIL = 3;             // vaga que veio de alerta por e-mail (já é uma busca sua)\nconst PESO_CARGO = 3;             // título tem palavra de cargo (ou palavra prioritária)\nconst PESO_JUNIOR = 2;            // título tem nível júnior (ou palavra prioritária)\nconst TETO_TECNOLOGIAS = 5;       // máximo que as tecnologias somam, não importa quantas apareçam\nconst PENAL_ANOS_MUITO_ALTO = 4;  // desconto quando pede anos_muito_alto ou mais\nconst PENAL_ANOS_ALTO = 2;        // desconto quando pede anos_alto ou mais\nconst BONUS_ANOS_BAIXO = 1;       // bônus quando pede até anos_baixo\nconst PENAL_EUA_EUROPA = 3;       // desconto quando o texto restringe a EUA/Canadá/Reino Unido/Europa\n// Tema das mensagens (identidade): vem do .env (TEMA). \"aranha\" (padrão) ou \"neutro\". Para trocar o texto, edite aqui.\nconst NEUTRO = $env.TEMA === 'neutro';\nconst TEXTO_CALMO = (dia, hora, n, aviso) => NEUTRO\n  ? `📭 ${dia} ${hora}: nenhuma vaga nova por enquanto (${n} analisadas).${aviso}`\n  : `🕸️ ${dia} ${hora}: sentido de aranha calmo, nenhuma vaga nova por enquanto (${n} analisadas).${aviso}`;\nconst TEXTO_NOVAS = (n, aviso) => NEUTRO\n  ? `🔔 Radar de Vagas: ${n} vaga(s) nova(s) pra você! Confira no PC o quanto antes.${aviso}`\n  : `🕷️ Meu Sentido de Aranha disparou!! ${n} vaga(s) nova(s) pra você! Confira no PC o quanto antes.${aviso}`;\nconst LOC_RESTRICT = /(must (be|reside|live)|authorized to work|work authorization|right to work).{0,60}(u\\.?s\\.?a?\\b|united states|canada|\\buk\\b|europe|\\beu\\b)/i;\n\nconst cfg = $('Configurações').first().json;\n\n// Deixa o texto \"comparável\": minúsculas, sem acento, hífen e espaços repetidos viram um espaço\nconst limpa = (s) => String(s ?? '').toLowerCase()\n  .normalize('NFD').replace(/[̀-ͯ]/g, '')\n  .replace(/[-_]/g, ' ').replace(/\\s+/g, ' ').trim();\n// \"a, b, c\" vira ['a', 'b', 'c']\nconst lista = (s) => String(s ?? '').split(',').map(limpa).filter(Boolean);\nconst escapa = (s) => s.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n// detector: .test(texto) diz se o texto tem alguma das palavras, como palavra inteira\n// (assim \"java\" não pega \"javascript\")\nconst detector = (termos) => {\n  const re = termos.length\n    ? new RegExp('(^|[^a-z0-9])(' + termos.map(escapa).join('|') + ')($|[^a-z0-9])')\n    : null;\n  return {\n    test: (texto) => (re ? re.test(limpa(texto)) : false),\n    // qual palavra bateu (serve para explicar a ressalva); null se nenhuma\n    acha: (texto) => { const m = re ? re.exec(limpa(texto)) : null; return m ? m[2] : null; },\n  };\n};\n\n// Verificação dos campos numéricos das Configurações: vazio, texto ou fora de faixa distorceria a nota sem ninguém\n// perceber (ex.: campo vazio vira 0). Por isso o nó falha de propósito, e o workflow de alerta registra.\nconst numero = (nome) => {\n  const bruto = cfg[nome];\n  if (bruto === '' || bruto === null || bruto === undefined || !Number.isFinite(Number(bruto))) {\n    throw new Error('Configurações: o campo \"' + nome + '\" precisa ser um número (está vazio ou inválido)');\n  }\n  return Number(bruto);\n};\nconst MIN_SCORE = numero('nota_minima');\nconst MAX_AGE_DAYS = numero('idade_maxima_dias');\nconst ANOS_MUITO_ALTO = numero('anos_muito_alto');   // anos de experiência pedidos: faixas que mexem na nota\nconst ANOS_ALTO = numero('anos_alto');\nconst ANOS_BAIXO = numero('anos_baixo');\nif (MIN_SCORE < 0 || MIN_SCORE > 10) throw new Error('Configurações: nota_minima precisa estar entre 0 e 10 (hoje ' + MIN_SCORE + ')');\nif (!(ANOS_MUITO_ALTO > ANOS_ALTO && ANOS_ALTO > ANOS_BAIXO)) {\n  throw new Error('Configurações: use anos_muito_alto > anos_alto > anos_baixo (hoje ' + ANOS_MUITO_ALTO + ' / ' + ANOS_ALTO + ' / ' + ANOS_BAIXO + ')');\n}\nconst ROLE = detector(lista(cfg.palavras_do_cargo));\nconst TITLE_BLOCK = detector(lista(cfg.palavras_bloqueadas_no_titulo));   // outra profissão\nconst STACK_BLOCK = detector(lista(cfg.palavras_bloqueadas_stack));       // stack indesejada (Júnior libera, com ressalva)\nconst PRIORITY = detector(lista(cfg.palavras_prioritarias));              // palavra que vence os bloqueios\nconst EXCLUIDA = detector(lista(cfg.senioridade_excluida)); // níveis que você não quer (estágio, sênior...); vazio = não exclui nenhum\nconst JUNIOR = detector(lista(cfg.palavras_nivel_junior));\nconst LOC_OK = detector(lista(cfg.locais_aceitos));\n// \"react: 1.5, node/nodejs: 1.5\" vira [[detector, 1.5], ...]; \"/\" separa sinônimos da mesma tecnologia\nconst STACK = String(cfg.tecnologias ?? '').split(',').map((par) => {\n  const [nomes, peso] = par.split(':');\n  return [detector(String(nomes ?? '').split('/').map(limpa).filter(Boolean)), Number(peso)];\n}).filter(([, peso]) => peso > 0);\n\n// ===== helpers =====\nconst ENT = { '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '\"', '&#39;': \"'\" };\nconst strip = (h) => String(h || '')\n  .replace(/&lt;/g, '<').replace(/&gt;/g, '>')            // descrições do RSS vêm com HTML escapado\n  .replace(/<[^>]*>/g, ' ')\n  .replace(/&nbsp;|&amp;|&lt;|&gt;|&quot;|&#39;/g, (m) => ENT[m])\n  .replace(/\\s+/g, ' ').trim();\nconst norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');\n\n// ===== normalização por fonte =====\nconst jobs = [];\nlet sourceErrors = 0;\n\nfor (const { json: j } of $input.all()) {\n  if (j.error) { sourceErrors++; continue; }\n\n  if (Array.isArray(j.jobs)) {                                   // Remotive\n    for (const r of j.jobs) jobs.push({\n      id: 'rm-' + r.id, source: 'Remotive', title: r.title, company: r.company_name,\n      location: r.candidate_required_location, url: r.url, date: r.publication_date,\n      text: strip(r.description) + ' ' + (r.tags || []).join(' '),\n    });\n  } else if (j.position && j.slug) {                              // RemoteOK\n    jobs.push({\n      id: 'rok-' + j.id, source: 'RemoteOK', title: j.position, company: j.company,\n      location: j.location, url: j.url, date: j.date,\n      text: strip(j.description) + ' ' + (j.tags || []).join(' '),\n    });\n  } else if (j.rss && j.rss.channel) {                            // We Work Remotely (XML -> JSON)\n    let items = j.rss.channel.item || [];\n    if (!Array.isArray(items)) items = [items];\n    for (const r of items) {\n      const full = String(r.title || '');\n      const i = full.indexOf(':');\n      jobs.push({\n        id: 'wwr-' + (r.guid || r.link), source: 'WeWorkRemotely',\n        title: i > 0 ? full.slice(i + 1).trim() : full, company: i > 0 ? full.slice(0, i).trim() : '',\n        location: typeof r.region === 'string' ? r.region : '', url: r.link || r.guid,\n        date: r.pubDate, text: strip(r.description),\n      });\n    }\n  } else if (j.id && j.source && j.trusted) {                       // vaga da fila de e-mails: já vem extraída pelos parsers\n    jobs.push(j);\n  }\n  // qualquer outro formato (ex.: item vazio do gatilho) é ignorado\n}\n\n// ===== trava de sanidade =====\n// Fonte que respondeu mas veio vazia é suspeita (API mudou? bloqueio?): avisa no resumo.\n// Se NENHUMA fonte esperada trouxe vagas, a execução falha de propósito, e o workflow de alerta registra.\nconst nomesEsperados = String(cfg.fontes_esperadas ?? '').split(',').map((s) => s.trim()).filter(Boolean);\nconst vieram = new Set(jobs.map((j) => limpa(j.source)));\n// \"Enviar fila agora\": as APIs foram puladas, só há vagas da fila. Aí não faz sentido cobrar as fontes esperadas.\nconst soFila = $input.all().map(({ json }) => json).filter((j) => !j._fila).every((j) => !j.error && j.id && j.source && j.trusted);\nconst vazias = soFila ? [] : nomesEsperados.filter((n) => !vieram.has(limpa(n)));\nif (nomesEsperados.length && vazias.length === nomesEsperados.length) {\n  throw new Error('Nenhuma fonte devolveu vagas (' + sourceErrors + ' com erro): confira a internet e as APIs');\n}\nconst problemas = Math.max(sourceErrors, vazias.length); // fonte que falha também vem vazia: não conta duas vezes\n\n// ===== score =====\nfunction score(job) {\n  const title = job.title || '';\n  // 1) senioridade excluída (campo senioridade_excluida): fora. Nem Júnior nem palavra prioritária salvam;\n  //    para voltar a receber estágio (ou sênior), tire as palavras do campo.\n  if (EXCLUIDA.test(title)) return null;\n  // 2) outra profissão: fora, a não ser que o título tenha palavra prioritária\n  const prioridade = PRIORITY.test(title);\n  if (TITLE_BLOCK.test(title) && !prioridade) return null;\n  // 3) stack indesejada: fora, a não ser que tenha palavra prioritária (passa normal) ou Júnior (passa com ressalva)\n  const ressalvas = [];\n  const stackRuim = STACK_BLOCK.acha(title);\n  if (stackRuim && !prioridade) {\n    if (!JUNIOR.test(title)) return null;\n    // o motivo cita a palavra que bateu (lida das Configurações): nada de texto fixo sobre \"Júnior\"\n    ressalvas.push('tem \"' + stackRuim + '\" (stack bloqueada), mas o título tem \"' + JUNIOR.acha(title) + '\" (nível júnior)');\n  }\n  // 4) vaga de API precisa de palavra de cargo (e-mail e palavra prioritária já contam)\n  if (!job.trusted && !ROLE.test(title) && !prioridade) return null;\n  // local: testa em toda vaga que traga local, exceto quando o parser do site garante que é Brasil (localConfiavel)\n  if (job.location && !job.localConfiavel && !LOC_OK.test(job.location)) return null;\n\n  const hay = title + ' ' + job.text;\n  let s = job.trusted ? PESO_EMAIL : 0;\n  if (ROLE.test(title) || prioridade) s += PESO_CARGO;\n  let stack = 0;\n  for (const [re, w] of STACK) if (re.test(hay)) stack += w;\n  s += Math.min(stack, TETO_TECNOLOGIAS);\n  if (JUNIOR.test(title) || prioridade) s += PESO_JUNIOR; // palavra prioritária vale como Júnior: vaga de API chega sozinha à nota mínima\n\n  const years = [...job.text.matchAll(/(\\d{1,2})\\s*\\+?\\s*(?:years?|anos)/gi)].map((m) => +m[1]);\n  if (years.length) {\n    const y = Math.max(...years);\n    // limites vêm das Configurações (perfil); os descontos são regra de negócio (constantes lá em cima)\n    if (y >= ANOS_MUITO_ALTO) s -= PENAL_ANOS_MUITO_ALTO; else if (y >= ANOS_ALTO) s -= PENAL_ANOS_ALTO; else if (y <= ANOS_BAIXO) s += BONUS_ANOS_BAIXO;\n  }\n  if (LOC_RESTRICT.test(job.text)) s -= PENAL_EUA_EUROPA;\n  return { nota: Math.max(0, Math.min(10, Math.round(s))), ressalvas };\n}\n\n// ===== dedup (memória entre execuções) =====\nconst store = $getWorkflowStaticData('global');\nstore.seen = store.seen || {};\nconst now = Date.now();\nfor (const k of Object.keys(store.seen)) {\n  if (now - store.seen[k] > SEEN_TTL_DAYS * 864e5) delete store.seen[k];\n}\n\nconst fresh = [];\nfor (const job of jobs) {\n  if (job.date) {\n    const t = Date.parse(job.date);\n    if (!isNaN(t) && now - t > MAX_AGE_DAYS * 864e5) continue;\n  }\n  const k1 = norm(job.id);\n  const k2 = norm(job.company) + '|' + norm(job.title);\n  if (store.seen[k1] || (job.company && store.seen[k2])) continue;\n  const r = score(job);\n  if (r === null || r.nota < MIN_SCORE) continue;\n  store.seen[k1] = now;\n  if (job.company) store.seen[k2] = now;\n  fresh.push({ ...job, score: r.nota, ressalvas: r.ressalvas });\n}\n// normais primeiro, \"com ressalvas\" depois; dentro de cada grupo, maior nota primeiro\n// a fila de e-mails foi consumida: tira dela o que foi lido nesta execução (o que chegou durante a execução fica)\nconst lidos = new Set(jobs.filter((j) => j._naFila).map((j) => j.id));\nif (lidos.size) store.fila = (store.fila || []).filter((v) => !lidos.has(v.id));\nfresh.sort((a, b) => (a.ressalvas.length > 0) - (b.ressalvas.length > 0) || b.score - a.score);\n\n// ===== mensagens =====\nconst day = new Date().toLocaleDateString('pt-BR', { timeZone: FUSO });\nconst detalhes = [];\nif (vazias.length) detalhes.push(`sem vagas: ${vazias.join(', ')}`);\nif (sourceErrors) detalhes.push(`${sourceErrors} com erro`);\nconst warn = detalhes.length ? `\\n⚠️ ${detalhes.join(' · ')}.` : '';\n\nif (!fresh.length) {\n  // manda aviso mesmo sem vaga: prova de que a automação rodou\n  const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: FUSO });\n  return [{ json: { text: TEXTO_CALMO(day, hora, jobs.length, warn),\n    vagas: [], analisadas: jobs.length, fontesComErro: problemas } }];\n}\n\nconst fmt = (j) => `⭐ ${j.score}/10 · ${j.title}${j.company ? ' — ' + j.company : ''}\\n📍 ${j.location || 'n/d'} · ${j.source}${j.ressalvas.length ? '\\n⚠️ ' + j.ressalvas.join(' · ') : ''}\\n${j.url}`;\nconst primeiraRessalva = fresh.find((j) => j.ressalvas.length);\n// junta as vagas em mensagens; começa outra mensagem quando passaria do limite do embed\nconst cabecalho = TEXTO_NOVAS(fresh.length, warn);\nconst blocos = [];\nlet atual = cabecalho;\nfor (const j of fresh) {\n  const titulo = j === primeiraRessalva ? '⚠️ COM RESSALVAS: passaram por terem no título uma palavra de nível júnior (' + String(cfg.palavras_nivel_junior).split(',').map((s) => s.trim()).filter(Boolean).join(', ') + '), mas têm algo que você bloqueou. Para mudar, veja os filtros no nó Configurações.\\n\\n' : '';\n  const bloco = titulo + fmt(j);\n  if ((atual + '\\n\\n' + bloco).length > MAX_CHARS) { blocos.push(atual); atual = bloco; }\n  else atual += '\\n\\n' + bloco;\n}\nblocos.push(atual);\nreturn blocos.map((text) => ({ json: { text: text.slice(0, 4000), vagas: fresh, analisadas: jobs.length, fontesComErro: problemas } }));\n"
+        "jsCode": "// ===== COMO O FILTRO DECIDE =====\n// Antes de tudo: vaga velha demais (idade_maxima_dias) ou já enviada antes (mesmo id, ou mesma empresa+título) é ignorada.\n// Vagas de e-mail chegam prontas (os parsers de cada site extraem antes do filtro); as das APIs são normalizadas aqui.\n// Depois, a função score() aplica as regras abaixo, NESTA ordem (a primeira que barrar descarta a vaga):\n//  1. Senioridade excluída no título ..... (senioridade_excluida: estágio, sênior, lead...) descarta. Nem \"Júnior\" nem palavra\n//                                          prioritária salvam; para voltar a receber estágio, tire as palavras desse campo.\n//  2. Outra profissão no título .......... (palavras_bloqueadas_no_titulo: devops, qa, sales...) descarta,\n//                                          a não ser que o título tenha uma palavra de palavras_prioritarias.\n//                                          Ex.: para começar a aplicar para QA, ponha \"qa\" em palavras_prioritarias.\n//  3. Stack indesejada no título ......... (palavras_bloqueadas_stack: java, php...) descarta, a não ser que:\n//                                          - tenha palavra prioritária: passa normal; ou\n//                                          - tenha \"Júnior\"/\"Jr\": passa \"COM RESSALVAS\" (aviso ⚠️ no Discord e na página).\n//  4. Vaga de API sem palavra de cargo ... (palavras_do_cargo) descarta. Vaga de e-mail e palavra prioritária já contam como cargo.\n//  5. Local .............................. se a vaga traz local e ele não está em locais_aceitos, descarta\n//                                          (exceto quando o parser do site marca localConfiavel).\n//  6. Nota de 0 a 10 ..................... pesos nas constantes PESO_* e PENAL_* logo abaixo; os limites de anos de experiência\n//                                          (anos_muito_alto, anos_alto, anos_baixo) vêm das Configurações. Abaixo de nota_minima: descarta.\n// Vaga \"com ressalvas\" aparece depois das normais, com o motivo, para você decidir ao clicar.\n// A nota é heurística (palavras e limites do nó \"Configurações\", pesos nas constantes abaixo), não IA.\n\n// ===== CONFIGURAÇÕES =====\n// Três camadas de ajuste:\n//  - PERFIL (muda com você): palavras, nota mínima, tecnologias, anos de experiência -> nó \"Configurações\", sem mexer aqui.\n//  - REGRA DE NEGÓCIO (como a nota é calculada, limites do sistema) -> as constantes logo abaixo. Só muda se a fórmula mudar.\n//  - AMBIENTE (muda com a máquina): fuso e URL do Discord -> arquivo .env.\nconst FUSO = $env.GENERIC_TIMEZONE || 'America/Sao_Paulo'; // fuso das datas e horas: vem do .env (GENERIC_TIMEZONE); sem ele, Brasília\nconst MAX_CHARS = 3500;           // tamanho máximo de cada mensagem (a descrição de um embed aceita até 4096)\nconst SEEN_TTL_DAYS = 60;         // por quanto tempo lembrar de vagas já enviadas\n// ⚠️ NÃO MEXA NOS PESOS ABAIXO SEM ENTENDER: um depende do outro e da nota_minima (quadro completo no README).\n//   - PESO_CARGO + PESO_JUNIOR precisa ser >= nota_minima (senão vaga de API com palavra prioritária nunca passa).\n//   - PESO_EMAIL precisa ser < nota_minima (senão toda vaga de e-mail passa, mesmo sem palavra de cargo).\n//   - PENAL_ANOS_MUITO_ALTO precisa ser forte o bastante para derrubar a nota abaixo de nota_minima.\n//   - TETO_TECNOLOGIAS: não suba muito nem desça abaixo de 2. BONUS_ANOS_BAIXO: mantenha pequeno.\n// Para receber mais ou menos vagas, mude a nota_minima (em Configurações), não os pesos.\n// Pesos da nota (regra de negócio):\nconst PESO_EMAIL = 3;             // vaga que veio de alerta por e-mail (já é uma busca sua)\nconst PESO_CARGO = 3;             // título tem palavra de cargo (ou palavra prioritária)\nconst PESO_JUNIOR = 2;            // título tem nível júnior (ou palavra prioritária)\nconst TETO_TECNOLOGIAS = 5;       // máximo que as tecnologias somam, não importa quantas apareçam\nconst PENAL_ANOS_MUITO_ALTO = 4;  // desconto quando pede anos_muito_alto ou mais\nconst PENAL_ANOS_ALTO = 2;        // desconto quando pede anos_alto ou mais\nconst BONUS_ANOS_BAIXO = 1;       // bônus quando pede até anos_baixo\nconst PENAL_EUA_EUROPA = 3;       // desconto quando o texto restringe a EUA/Canadá/Reino Unido/Europa\n// Tema das mensagens (identidade): vem do .env (TEMA). \"aranha\" (padrão) ou \"neutro\". Para trocar o texto, edite aqui.\nconst NEUTRO = $env.TEMA === 'neutro';\nconst TEXTO_CALMO = (dia, hora, n, aviso) => NEUTRO\n  ? `📭 ${dia} ${hora}: nenhuma vaga nova por enquanto (${n} analisadas).${aviso}`\n  : `🕸️ ${dia} ${hora}: sentido de aranha calmo, nenhuma vaga nova por enquanto (${n} analisadas).${aviso}`;\nconst TEXTO_NOVAS = (n, aviso) => NEUTRO\n  ? `🔔 Radar de Vagas: ${n} vaga(s) nova(s) pra você! Confira no PC o quanto antes.${aviso}`\n  : `🕷️ Meu Sentido de Aranha disparou!! ${n} vaga(s) nova(s) pra você! Confira no PC o quanto antes.${aviso}`;\nconst LOC_RESTRICT = /(must (be|reside|live)|authorized to work|work authorization|right to work).{0,60}(u\\.?s\\.?a?\\b|united states|canada|\\buk\\b|europe|\\beu\\b)/i;\n\nconst cfg = $('Configurações').first().json;\n\n// Deixa o texto \"comparável\": minúsculas, sem acento, hífen e espaços repetidos viram um espaço\nconst limpa = (s) => String(s ?? '').toLowerCase()\n  .normalize('NFD').replace(/[̀-ͯ]/g, '')\n  .replace(/[-_]/g, ' ').replace(/\\s+/g, ' ').trim();\n// \"a, b, c\" vira ['a', 'b', 'c']\nconst lista = (s) => String(s ?? '').split(',').map(limpa).filter(Boolean);\nconst escapa = (s) => s.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n// detector: .test(texto) diz se o texto tem alguma das palavras, como palavra inteira\n// (assim \"java\" não pega \"javascript\")\nconst detector = (termos) => {\n  const re = termos.length\n    ? new RegExp('(^|[^a-z0-9])(' + termos.map(escapa).join('|') + ')($|[^a-z0-9])')\n    : null;\n  return {\n    test: (texto) => (re ? re.test(limpa(texto)) : false),\n    // qual palavra bateu (serve para explicar a ressalva); null se nenhuma\n    acha: (texto) => { const m = re ? re.exec(limpa(texto)) : null; return m ? m[2] : null; },\n  };\n};\n\n// Verificação dos campos numéricos das Configurações: vazio, texto ou fora de faixa distorceria a nota sem ninguém\n// perceber (ex.: campo vazio vira 0). Por isso o nó falha de propósito, e o workflow de alerta registra.\nconst numero = (nome) => {\n  const bruto = cfg[nome];\n  if (bruto === '' || bruto === null || bruto === undefined || !Number.isFinite(Number(bruto))) {\n    throw new Error('Configurações: o campo \"' + nome + '\" precisa ser um número (está vazio ou inválido)');\n  }\n  return Number(bruto);\n};\nconst MIN_SCORE = numero('nota_minima');\nconst MAX_AGE_DAYS = numero('idade_maxima_dias');\nconst ANOS_MUITO_ALTO = numero('anos_muito_alto');   // anos de experiência pedidos: faixas que mexem na nota\nconst ANOS_ALTO = numero('anos_alto');\nconst ANOS_BAIXO = numero('anos_baixo');\nif (MIN_SCORE < 0 || MIN_SCORE > 10) throw new Error('Configurações: nota_minima precisa estar entre 0 e 10 (hoje ' + MIN_SCORE + ')');\nif (!(ANOS_MUITO_ALTO > ANOS_ALTO && ANOS_ALTO > ANOS_BAIXO)) {\n  throw new Error('Configurações: use anos_muito_alto > anos_alto > anos_baixo (hoje ' + ANOS_MUITO_ALTO + ' / ' + ANOS_ALTO + ' / ' + ANOS_BAIXO + ')');\n}\nconst ROLE = detector(lista(cfg.palavras_do_cargo));\nconst TITLE_BLOCK = detector(lista(cfg.palavras_bloqueadas_no_titulo));   // outra profissão\nconst STACK_BLOCK = detector(lista(cfg.palavras_bloqueadas_stack));       // stack indesejada (Júnior libera, com ressalva)\nconst PRIORITY = detector(lista(cfg.palavras_prioritarias));              // palavra que vence os bloqueios\nconst EXCLUIDA = detector(lista(cfg.senioridade_excluida)); // níveis que você não quer (estágio, sênior...); vazio = não exclui nenhum\nconst JUNIOR = detector(lista(cfg.palavras_nivel_junior));\nconst LOC_OK = detector(lista(cfg.locais_aceitos));\n// \"react: 1.5, node/nodejs: 1.5\" vira [[detector, 1.5], ...]; \"/\" separa sinônimos da mesma tecnologia\nconst STACK = String(cfg.tecnologias ?? '').split(',').map((par) => {\n  const [nomes, peso] = par.split(':');\n  return [detector(String(nomes ?? '').split('/').map(limpa).filter(Boolean)), Number(peso)];\n}).filter(([, peso]) => peso > 0);\n\n// ===== helpers =====\nconst ENT = { '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '\"', '&#39;': \"'\" };\nconst strip = (h) => String(h || '')\n  .replace(/&lt;/g, '<').replace(/&gt;/g, '>')            // descrições do RSS vêm com HTML escapado\n  .replace(/<[^>]*>/g, ' ')\n  .replace(/&nbsp;|&amp;|&lt;|&gt;|&quot;|&#39;/g, (m) => ENT[m])\n  .replace(/\\s+/g, ' ').trim();\nconst norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');\n\n// ===== normalização por fonte =====\nconst jobs = [];\nlet sourceErrors = 0;\n\nfor (const { json: j } of $input.all()) {\n  if (j.error) { sourceErrors++; continue; }\n\n  if (Array.isArray(j.jobs)) {                                   // Remotive\n    for (const r of j.jobs) jobs.push({\n      id: 'rm-' + r.id, source: 'Remotive', title: r.title, company: r.company_name,\n      location: r.candidate_required_location, url: r.url, date: r.publication_date,\n      text: strip(r.description) + ' ' + (r.tags || []).join(' '),\n    });\n  } else if (j.position && j.slug) {                              // RemoteOK\n    jobs.push({\n      id: 'rok-' + j.id, source: 'RemoteOK', title: j.position, company: j.company,\n      location: j.location, url: j.url, date: j.date,\n      text: strip(j.description) + ' ' + (j.tags || []).join(' '),\n    });\n  } else if (j.rss && j.rss.channel) {                            // We Work Remotely (XML -> JSON)\n    let items = j.rss.channel.item || [];\n    if (!Array.isArray(items)) items = [items];\n    for (const r of items) {\n      const full = String(r.title || '');\n      const i = full.indexOf(':');\n      jobs.push({\n        id: 'wwr-' + (r.guid || r.link), source: 'WeWorkRemotely',\n        title: i > 0 ? full.slice(i + 1).trim() : full, company: i > 0 ? full.slice(0, i).trim() : '',\n        location: typeof r.region === 'string' ? r.region : '', url: r.link || r.guid,\n        date: r.pubDate, text: strip(r.description),\n      });\n    }\n  } else if (j.id && j.source && j.trusted) {                       // vaga de e-mail: já vem extraída pelos parsers\n    jobs.push(j);\n  }\n  // qualquer outro formato (ex.: item vazio do gatilho) é ignorado\n}\n\n// ===== trava de sanidade =====\n// Fonte que respondeu mas veio vazia é suspeita (API mudou? bloqueio?): avisa no resumo.\n// Se NENHUMA fonte esperada trouxe vagas, a execução falha de propósito, e o workflow de alerta registra.\nconst nomesEsperados = String(cfg.fontes_esperadas ?? '').split(',').map((s) => s.trim()).filter(Boolean);\nconst vieram = new Set(jobs.map((j) => limpa(j.source)));\n// Execução que começou por e-mail: as APIs não rodaram, só há vagas dos parsers. Aí não faz sentido cobrar as fontes esperadas.\nconst soEmail = $input.all().map(({ json }) => json).every((j) => !j.error && j.id && j.source && j.trusted);\nconst vazias = soEmail ? [] : nomesEsperados.filter((n) => !vieram.has(limpa(n)));\nif (nomesEsperados.length && vazias.length === nomesEsperados.length) {\n  throw new Error('Nenhuma fonte devolveu vagas (' + sourceErrors + ' com erro): confira a internet e as APIs');\n}\nconst problemas = Math.max(sourceErrors, vazias.length); // fonte que falha também vem vazia: não conta duas vezes\n\n// ===== score =====\nfunction score(job) {\n  const title = job.title || '';\n  // 1) senioridade excluída (campo senioridade_excluida): fora. Nem Júnior nem palavra prioritária salvam;\n  //    para voltar a receber estágio (ou sênior), tire as palavras do campo.\n  if (EXCLUIDA.test(title)) return null;\n  // 2) outra profissão: fora, a não ser que o título tenha palavra prioritária\n  const prioridade = PRIORITY.test(title);\n  if (TITLE_BLOCK.test(title) && !prioridade) return null;\n  // 3) stack indesejada: fora, a não ser que tenha palavra prioritária (passa normal) ou Júnior (passa com ressalva)\n  const ressalvas = [];\n  const stackRuim = STACK_BLOCK.acha(title);\n  if (stackRuim && !prioridade) {\n    if (!JUNIOR.test(title)) return null;\n    // o motivo cita a palavra que bateu (lida das Configurações): nada de texto fixo sobre \"Júnior\"\n    ressalvas.push('tem \"' + stackRuim + '\" (stack bloqueada), mas o título tem \"' + JUNIOR.acha(title) + '\" (nível júnior)');\n  }\n  // 4) vaga de API precisa de palavra de cargo (e-mail e palavra prioritária já contam)\n  if (!job.trusted && !ROLE.test(title) && !prioridade) return null;\n  // local: testa em toda vaga que traga local, exceto quando o parser do site garante que é Brasil (localConfiavel)\n  if (job.location && !job.localConfiavel && !LOC_OK.test(job.location)) return null;\n\n  const hay = title + ' ' + job.text;\n  let s = job.trusted ? PESO_EMAIL : 0;\n  if (ROLE.test(title) || prioridade) s += PESO_CARGO;\n  let stack = 0;\n  for (const [re, w] of STACK) if (re.test(hay)) stack += w;\n  s += Math.min(stack, TETO_TECNOLOGIAS);\n  if (JUNIOR.test(title) || prioridade) s += PESO_JUNIOR; // palavra prioritária vale como Júnior: vaga de API chega sozinha à nota mínima\n\n  const years = [...job.text.matchAll(/(\\d{1,2})\\s*\\+?\\s*(?:years?|anos)/gi)].map((m) => +m[1]);\n  if (years.length) {\n    const y = Math.max(...years);\n    // limites vêm das Configurações (perfil); os descontos são regra de negócio (constantes lá em cima)\n    if (y >= ANOS_MUITO_ALTO) s -= PENAL_ANOS_MUITO_ALTO; else if (y >= ANOS_ALTO) s -= PENAL_ANOS_ALTO; else if (y <= ANOS_BAIXO) s += BONUS_ANOS_BAIXO;\n  }\n  if (LOC_RESTRICT.test(job.text)) s -= PENAL_EUA_EUROPA;\n  return { nota: Math.max(0, Math.min(10, Math.round(s))), ressalvas };\n}\n\n// ===== dedup (memória entre execuções) =====\nconst store = $getWorkflowStaticData('global');\nstore.seen = store.seen || {};\nconst now = Date.now();\nfor (const k of Object.keys(store.seen)) {\n  if (now - store.seen[k] > SEEN_TTL_DAYS * 864e5) delete store.seen[k];\n}\n\nconst fresh = [];\nfor (const job of jobs) {\n  if (job.date) {\n    const t = Date.parse(job.date);\n    if (!isNaN(t) && now - t > MAX_AGE_DAYS * 864e5) continue;\n  }\n  const k1 = norm(job.id);\n  const k2 = norm(job.company) + '|' + norm(job.title);\n  if (store.seen[k1] || (job.company && store.seen[k2])) continue;\n  const r = score(job);\n  if (r === null || r.nota < MIN_SCORE) continue;\n  store.seen[k1] = now;\n  if (job.company) store.seen[k2] = now;\n  fresh.push({ ...job, score: r.nota, ressalvas: r.ressalvas });\n}\n// normais primeiro, \"com ressalvas\" depois; dentro de cada grupo, maior nota primeiro\nfresh.sort((a, b) => (a.ressalvas.length > 0) - (b.ressalvas.length > 0) || b.score - a.score);\n\n// ===== mensagens =====\nconst day = new Date().toLocaleDateString('pt-BR', { timeZone: FUSO });\nconst detalhes = [];\nif (vazias.length) detalhes.push(`sem vagas: ${vazias.join(', ')}`);\nif (sourceErrors) detalhes.push(`${sourceErrors} com erro`);\nconst warn = detalhes.length ? `\\n⚠️ ${detalhes.join(' · ')}.` : '';\n\nif (!fresh.length) {\n  // manda aviso mesmo sem vaga: prova de que a automação rodou\n  const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: FUSO });\n  return [{ json: { text: TEXTO_CALMO(day, hora, jobs.length, warn),\n    vagas: [], analisadas: jobs.length, fontesComErro: problemas } }];\n}\n\nconst fmt = (j) => `⭐ ${j.score}/10 · ${j.title}${j.company ? ' — ' + j.company : ''}\\n📍 ${j.location || 'n/d'} · ${j.source}${j.ressalvas.length ? '\\n⚠️ ' + j.ressalvas.join(' · ') : ''}\\n${j.url}`;\nconst primeiraRessalva = fresh.find((j) => j.ressalvas.length);\n// junta as vagas em mensagens; começa outra mensagem quando passaria do limite do embed\nconst cabecalho = TEXTO_NOVAS(fresh.length, warn);\nconst blocos = [];\nlet atual = cabecalho;\nfor (const j of fresh) {\n  const titulo = j === primeiraRessalva ? '⚠️ COM RESSALVAS: passaram por terem no título uma palavra de nível júnior (' + String(cfg.palavras_nivel_junior).split(',').map((s) => s.trim()).filter(Boolean).join(', ') + '), mas têm algo que você bloqueou. Para mudar, veja os filtros no nó Configurações.\\n\\n' : '';\n  const bloco = titulo + fmt(j);\n  if ((atual + '\\n\\n' + bloco).length > MAX_CHARS) { blocos.push(atual); atual = bloco; }\n  else atual += '\\n\\n' + bloco;\n}\nblocos.push(atual);\nreturn blocos.map((text) => ({ json: { text: text.slice(0, 4000), vagas: fresh, analisadas: jobs.length, fontesComErro: problemas } }));\n"
       }
     },
     {
@@ -220,7 +220,7 @@
         420
       ],
       "parameters": {
-        "jsCode": "// Monta a página inicial: histórico das últimas vagas, 10 por página.\n// Todos os itens de entrada carregam a mesma lista de vagas da execução; basta o primeiro.\nconst FUSO = $env.GENERIC_TIMEZONE || 'America/Sao_Paulo'; // fuso das datas e horas: vem do .env (GENERIC_TIMEZONE); sem ele, Brasília\nconst N8N_URL = 'http://localhost:5678'; // endereço do seu n8n (os botões da fila abrem links dele)\nconst HISTORICO_MAX = 200;        // quantas vagas a página lembra\n// Tema (identidade): vem do .env (TEMA). \"aranha\" (padrão) ou \"neutro\". Também decide o prefixo dos nomes de arquivo.\nconst NEUTRO = $env.TEMA === 'neutro';\nconst NOME = NEUTRO ? 'Radar de Vagas' : 'Meu Sentido de Aranha';\nconst PREFIXO = NEUTRO ? '' : 'spider-man-';   // spider-man-alertas.html (aranha) ou alertas.html (neutro)\nconst TEXTO_SEM_VAGAS = NEUTRO ? 'Nenhuma vaga por enquanto.' : 'Sentido de aranha calmo: nenhuma vaga por enquanto.';\nconst j = $input.first().json;\n// palavras de nível júnior vindas das Configurações (para explicar a ressalva sem texto fixo)\nconst palavrasJunior = String($('Configurações').first().json.palavras_nivel_junior || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ');\n\nconst esc = (s) => String(s ?? '').replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[c]));\n// o link vem de fonte externa: só aceita http(s), para não virar \"javascript:...\"\nconst linkSeguro = (u) => (/^https?:\\/\\//i.test(String(u)) ? esc(u) : '#');\nconst formata = (iso) => new Date(iso).toLocaleString('pt-BR', { timeZone: FUSO });\n\nconst d = new Date();\n// o formato sueco já vem como \"2026-11-06 20:41:55\"; ficamos com ano até minutos\nconst agora = d.toLocaleString('sv-SE', { timeZone: FUSO }).slice(0, 16); // \"2026-11-06 20:41\"\nconst stamp = agora.replace(' ', '_').replace(':', '');                    // \"2026-11-06_2041\"\nconst quando = formata(d.toISOString());\n\n// --- histórico: fica na memória do workflow (só é gravada nas execuções automáticas) ---\nconst store = $getWorkflowStaticData('global');\nconst novas = (j.vagas || []).map((v) => ({\n  score: v.score, title: v.title, company: v.company, location: v.location,\n  source: v.source, url: v.url, encontradaEm: d.toISOString(), ressalvas: v.ressalvas || [],\n}));\nconst urlsNovas = new Set(novas.map((v) => v.url));\nconst antigas = (store.historico || []).filter((v) => !urlsNovas.has(v.url));\nstore.historico = [...novas, ...antigas].slice(0, HISTORICO_MAX);\nconst lista = store.historico;\n\nconst analisadas = j.analisadas ?? 0;\nconst erros = j.fontesComErro || 0;\n\n// nota 8 ou mais ganha destaque vermelho; as demais ficam em azul\nconst classeNota = (n) => (n >= 8 ? 'alta' : 'media');\n\nconst cartoes = lista.map((v) => `\n      <li class=\"cartao\" data-ressalva=\"${(v.ressalvas || []).length ? 'sim' : 'nao'}\">\n        <div class=\"nota ${classeNota(v.score)}\" aria-label=\"Nota ${esc(v.score)} de 10\"><span>${esc(v.score)}</span><small>/10</small></div>\n        <div class=\"corpo\">\n          <h2>${esc(v.title)}${urlsNovas.has(v.url) ? ' <span class=\"etiqueta\">Nova</span>' : ''}</h2>\n          <p class=\"empresa\">${esc(v.company || 'Empresa não informada')}</p>\n          <p class=\"meta\">${esc(v.location || 'Local não informado')} &middot; ${esc(v.source)} &middot; encontrada em ${esc(formata(v.encontradaEm))}</p>\n          ${(v.ressalvas || []).length ? `<p class=\"ressalva\">⚠️ Ressalva: ${esc(v.ressalvas.join(' · '))}</p>` : ''}\n        </div>\n        <a class=\"botao\" href=\"${linkSeguro(v.url)}\" target=\"_blank\" rel=\"noopener noreferrer\">Abrir vaga</a>\n      </li>`).join('');\n\nconst comRessalva = lista.filter((v) => (v.ressalvas || []).length).length;\nconst filtros = `<nav class=\"filtros\" id=\"filtros\" aria-label=\"Filtrar vagas\">\n    <a href=\"#\" data-f=\"todas\">Todas (${lista.length})</a>\n    <a href=\"#sem\" data-f=\"sem\">Sem ressalvas (${lista.length - comRessalva})</a>\n    <a href=\"#com\" data-f=\"com\">Com ressalvas (${comRessalva})</a>\n  </nav>\n  <p class=\"dica\" id=\"dica-ressalva\" hidden>⚠️ Estas vagas passaram por terem no título uma palavra de nível júnior (${esc(palavrasJunior)}), mas têm algo que você bloqueou. Para mudar, ajuste os filtros no nó Configurações (<code>palavras_bloqueadas_stack</code>, <code>palavras_prioritarias</code>).</p>`;\nconst conteudo = lista.length\n  ? `${filtros}\\n  <ol class=\"lista\">${cartoes}\\n    </ol>\\n  <p class=\"vazio\" id=\"sem-resultado\" hidden>Nenhuma vaga neste filtro.</p>\\n  <nav class=\"paginas\" id=\"paginas\" aria-label=\"Páginas\"></nav>`\n  : `<p class=\"vazio\">${TEXTO_SEM_VAGAS}</p>`;\n\nconst tileErro = erros\n  ? `<li class=\"erro\"><div class=\"numero\">${erros}</div><div class=\"rotulo\">fonte(s) com problema</div></li>`\n  : '';\n\n// paginação no navegador: mostra 10 cartões por vez e guarda filtro e página no endereço (#com-p2),\n// para o link \"Atualizar\" (location.reload) manter a mesma visão\nconst script = `\n(function () {\n  var POR_PAGINA = 10;\n  var todos = Array.prototype.slice.call(document.querySelectorAll('.lista > li'));\n  var nav = document.getElementById('paginas');\n  var filtros = document.getElementById('filtros');\n  var semResultado = document.getElementById('sem-resultado');\n  if (!nav) return;\n  // o endereço guarda o filtro e a página: #com-p2 = \"com ressalvas\", página 2 (vazio = todas, página 1)\n  function estado() {\n    var m = /^#(?:(com|sem)-?)?(?:p([0-9]+))?$/.exec(location.hash);\n    return { f: (m && m[1]) || 'todas', p: m && m[2] ? parseInt(m[2], 10) : 1 };\n  }\n  function mostrar() {\n    var e = estado();\n    var visiveis = todos.filter(function (li) {\n      var tem = li.getAttribute('data-ressalva') === 'sim';\n      return e.f === 'todas' || (e.f === 'com') === tem;\n    });\n    var total = Math.max(1, Math.ceil(visiveis.length / POR_PAGINA));\n    var p = Math.min(Math.max(e.p, 1), total);\n    todos.forEach(function (li) { li.hidden = true; });\n    visiveis.forEach(function (li, i) { li.hidden = Math.floor(i / POR_PAGINA) + 1 !== p; });\n    if (semResultado) semResultado.hidden = visiveis.length > 0;\n    var dica = document.getElementById('dica-ressalva');\n    if (dica) dica.hidden = e.f !== 'com'; // a explicação só aparece na visão \"Com ressalvas\"\n    var prefixo = e.f === 'todas' ? '' : e.f + '-';\n    nav.innerHTML = '';\n    for (var n = 1; total > 1 && n <= total; n++) {\n      var a = document.createElement('a');\n      a.href = '#' + prefixo + 'p' + n;\n      a.textContent = n;\n      if (n === p) a.setAttribute('aria-current', 'page');\n      nav.appendChild(a);\n    }\n    if (filtros) {\n      Array.prototype.forEach.call(filtros.querySelectorAll('a'), function (a) {\n        if (a.getAttribute('data-f') === e.f) a.setAttribute('aria-current', 'true');\n        else a.removeAttribute('aria-current');\n      });\n    }\n  }\n  window.addEventListener('hashchange', mostrar);\n  mostrar();\n})();`;\n\nconst html = `<!doctype html>\n<html lang=\"pt-BR\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>${NOME} — vagas</title>\n<style>\n  :root {\n    color-scheme: light dark;\n    --bg: #f6f6f4; --card: #ffffff; --texto: #14161a; --suave: #5b6068; --borda: #dcdcd6;\n    --vermelho: #c8102e; --azul: #1b3a8c; --sobre-vermelho: #ffffff;\n  }\n  @media (prefers-color-scheme: dark) {\n    :root {\n      --bg: #101114; --card: #1a1c21; --texto: #f2f2f0; --suave: #a3a8b0; --borda: #2c2f36;\n      --vermelho: #ff5a62; --azul: #8fb0ff; --sobre-vermelho: #14161a;\n    }\n  }\n  * { box-sizing: border-box; }\n  body { margin: 0; background: var(--bg); color: var(--texto); font-family: \"Segoe UI\", system-ui, -apple-system, sans-serif; line-height: 1.5; }\n  main { max-width: 860px; margin: 0 auto; padding: 2rem 1rem 3rem; }\n  header { border-bottom: 4px solid var(--vermelho); padding-bottom: 1rem; margin-bottom: 1.5rem; }\n  h1 { margin: 0; font-family: \"Arial Black\", \"Segoe UI Black\", system-ui, sans-serif; font-size: clamp(1.6rem, 5vw, 2.4rem); text-transform: uppercase; letter-spacing: .02em; line-height: 1.1; }\n  .sub { margin: .4rem 0 0; color: var(--suave); }\n  .sub a { color: var(--azul); font-weight: 700; }\n  .resumo { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; margin: 0 0 1.5rem; padding: 0; list-style: none; }\n  .resumo li { background: var(--card); border: 1px solid var(--borda); border-top: 4px solid var(--azul); border-radius: 8px; padding: .9rem 1rem; }\n  .resumo li.erro { border-top-color: var(--vermelho); }\n  .numero { font-size: 2rem; font-weight: 800; line-height: 1; }\n  .rotulo { color: var(--suave); font-size: .9rem; margin-top: .3rem; }\n  .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: .75rem; }\n  .cartao { display: grid; grid-template-columns: auto 1fr auto; gap: 1rem; align-items: center; background: var(--card); border: 1px solid var(--borda); border-radius: 8px; padding: 1rem; }\n  .cartao[hidden] { display: none; }\n  .nota { min-width: 3.6rem; text-align: center; border-radius: 8px; padding: .5rem .4rem; font-weight: 800; line-height: 1; }\n  .nota span { font-size: 1.7rem; }\n  .nota small { font-size: .8rem; font-weight: 600; }\n  .nota.alta { background: var(--vermelho); color: var(--sobre-vermelho); }\n  .nota.media { border: 2px solid var(--azul); color: var(--azul); }\n  .corpo h2 { margin: 0; font-size: 1.05rem; line-height: 1.3; }\n  .etiqueta { display: inline-block; margin-left: .35rem; padding: .05rem .45rem; border-radius: 4px; background: var(--vermelho); color: var(--sobre-vermelho); font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; vertical-align: middle; }\n  .empresa { margin: .15rem 0 0; font-weight: 600; }\n  .meta { margin: .15rem 0 0; color: var(--suave); font-size: .9rem; }\n  .botao { display: inline-block; padding: .55rem 1rem; border: 2px solid var(--azul); border-radius: 6px; color: var(--azul); font-weight: 700; text-decoration: none; white-space: nowrap; }\n  .botao:hover { background: var(--azul); color: var(--bg); }\n  .botao:focus-visible, .paginas a:focus-visible, .sub a:focus-visible { outline: 3px solid var(--vermelho); outline-offset: 2px; }\n  .filtros { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 1rem; }\n  .filtros a { padding: .4rem .8rem; border: 2px solid var(--azul); border-radius: 6px; color: var(--azul); font-weight: 700; text-decoration: none; }\n  .filtros a[aria-current=\"true\"] { background: var(--azul); color: var(--bg); }\n  .filtros a:focus-visible { outline: 3px solid var(--vermelho); outline-offset: 2px; }\n  .ressalva { margin: .3rem 0 0; font-size: .9rem; font-weight: 600; color: var(--vermelho); }\n  .vazio[hidden], .dica[hidden] { display: none; }\n  .dica { margin: 0 0 1rem; padding: .7rem 1rem; border: 1px solid var(--borda); border-left: 4px solid var(--vermelho); border-radius: 6px; background: var(--card); font-size: .9rem; }\n  .dica code { font-size: .85em; }\n  .paginas { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: 1.25rem; }\n  .paginas a { min-width: 2.4rem; text-align: center; padding: .4rem .7rem; border: 2px solid var(--azul); border-radius: 6px; color: var(--azul); font-weight: 700; text-decoration: none; }\n  .paginas a[aria-current=\"page\"] { background: var(--azul); color: var(--bg); }\n  .vazio { background: var(--card); border: 1px solid var(--borda); border-radius: 8px; padding: 2rem 1rem; text-align: center; color: var(--suave); }\n  footer { margin-top: 2rem; color: var(--suave); font-size: .85rem; }\n  @media (max-width: 560px) {\n    .cartao { grid-template-columns: auto 1fr; }\n    .botao { grid-column: 1 / -1; text-align: center; }\n  }\n</style>\n</head>\n<body>\n<main>\n  <header>\n    <h1>${NOME}</h1>\n    <p class=\"sub\">${NEUTRO ? '' : 'Radar de vagas &middot; '}gerado em ${esc(quando)} &middot; <a href=\"${PREFIXO}alertas.html\">Alertas</a> &middot; <a href=\"#\" onclick=\"location.reload(); return false;\">Atualizar</a> &middot; <a href=\"${N8N_URL}/webhook/ver-fila\" target=\"_blank\" rel=\"noopener\">Ver fila</a> &middot; <a href=\"${N8N_URL}/webhook/enviar-fila\" target=\"_blank\" rel=\"noopener\">Enviar fila agora</a></p>\n  </header>\n  <ul class=\"resumo\">\n    <li><div class=\"numero\">${novas.length}</div><div class=\"rotulo\">nova(s) nesta execução</div></li>\n    <li><div class=\"numero\">${lista.length}</div><div class=\"rotulo\">no histórico</div></li>\n    <li><div class=\"numero\">${esc(analisadas)}</div><div class=\"rotulo\">vagas analisadas</div></li>\n    ${tileErro}\n  </ul>\n  ${conteudo}\n  <footer>Fontes: Remotive, RemoteOK e We Work Remotely. Cada vaga leva à página original.</footer>\n</main>\n<script>${script}</script>\n</body>\n</html>`;\n\nreturn [{ json: { fileName: `vagas-${stamp}.html`, html } }];\n"
+        "jsCode": "// Monta a página inicial: histórico das últimas vagas, 10 por página.\n// Todos os itens de entrada carregam a mesma lista de vagas da execução; basta o primeiro.\nconst FUSO = $env.GENERIC_TIMEZONE || 'America/Sao_Paulo'; // fuso das datas e horas: vem do .env (GENERIC_TIMEZONE); sem ele, Brasília\nconst N8N_URL = 'http://localhost:5678'; // endereço do seu n8n (o link \"Buscar agora\" abre o webhook dele)\nconst HISTORICO_MAX = 200;        // quantas vagas a página lembra\n// Tema (identidade): vem do .env (TEMA). \"aranha\" (padrão) ou \"neutro\". Também decide o prefixo dos nomes de arquivo.\nconst NEUTRO = $env.TEMA === 'neutro';\nconst NOME = NEUTRO ? 'Radar de Vagas' : 'Meu Sentido de Aranha';\nconst PREFIXO = NEUTRO ? '' : 'spider-man-';   // spider-man-alertas.html (aranha) ou alertas.html (neutro)\nconst TEXTO_SEM_VAGAS = NEUTRO ? 'Nenhuma vaga por enquanto.' : 'Sentido de aranha calmo: nenhuma vaga por enquanto.';\nconst j = $input.first().json;\n// palavras de nível júnior vindas das Configurações (para explicar a ressalva sem texto fixo)\nconst palavrasJunior = String($('Configurações').first().json.palavras_nivel_junior || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ');\n\nconst esc = (s) => String(s ?? '').replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[c]));\n// o link vem de fonte externa: só aceita http(s), para não virar \"javascript:...\"\nconst linkSeguro = (u) => (/^https?:\\/\\//i.test(String(u)) ? esc(u) : '#');\nconst formata = (iso) => new Date(iso).toLocaleString('pt-BR', { timeZone: FUSO });\n\nconst d = new Date();\n// o formato sueco já vem como \"2026-11-06 20:41:55\"; ficamos com ano até minutos\nconst agora = d.toLocaleString('sv-SE', { timeZone: FUSO }).slice(0, 16); // \"2026-11-06 20:41\"\nconst stamp = agora.replace(' ', '_').replace(':', '');                    // \"2026-11-06_2041\"\nconst quando = formata(d.toISOString());\n\n// --- histórico: fica na memória do workflow (só é gravada nas execuções automáticas) ---\nconst store = $getWorkflowStaticData('global');\nconst novas = (j.vagas || []).map((v) => ({\n  score: v.score, title: v.title, company: v.company, location: v.location,\n  source: v.source, url: v.url, encontradaEm: d.toISOString(), ressalvas: v.ressalvas || [],\n}));\nconst urlsNovas = new Set(novas.map((v) => v.url));\nconst antigas = (store.historico || []).filter((v) => !urlsNovas.has(v.url));\nstore.historico = [...novas, ...antigas].slice(0, HISTORICO_MAX);\nconst lista = store.historico;\n\nconst analisadas = j.analisadas ?? 0;\nconst erros = j.fontesComErro || 0;\n\n// nota 8 ou mais ganha destaque vermelho; as demais ficam em azul\nconst classeNota = (n) => (n >= 8 ? 'alta' : 'media');\n\nconst cartoes = lista.map((v) => `\n      <li class=\"cartao\" data-ressalva=\"${(v.ressalvas || []).length ? 'sim' : 'nao'}\">\n        <div class=\"nota ${classeNota(v.score)}\" aria-label=\"Nota ${esc(v.score)} de 10\"><span>${esc(v.score)}</span><small>/10</small></div>\n        <div class=\"corpo\">\n          <h2>${esc(v.title)}${urlsNovas.has(v.url) ? ' <span class=\"etiqueta\">Nova</span>' : ''}</h2>\n          <p class=\"empresa\">${esc(v.company || 'Empresa não informada')}</p>\n          <p class=\"meta\">${esc(v.location || 'Local não informado')} &middot; ${esc(v.source)} &middot; encontrada em ${esc(formata(v.encontradaEm))}</p>\n          ${(v.ressalvas || []).length ? `<p class=\"ressalva\">⚠️ Ressalva: ${esc(v.ressalvas.join(' · '))}</p>` : ''}\n        </div>\n        <a class=\"botao\" href=\"${linkSeguro(v.url)}\" target=\"_blank\" rel=\"noopener noreferrer\">Abrir vaga</a>\n      </li>`).join('');\n\nconst comRessalva = lista.filter((v) => (v.ressalvas || []).length).length;\nconst filtros = `<nav class=\"filtros\" id=\"filtros\" aria-label=\"Filtrar vagas\">\n    <a href=\"#\" data-f=\"todas\">Todas (${lista.length})</a>\n    <a href=\"#sem\" data-f=\"sem\">Sem ressalvas (${lista.length - comRessalva})</a>\n    <a href=\"#com\" data-f=\"com\">Com ressalvas (${comRessalva})</a>\n  </nav>\n  <p class=\"dica\" id=\"dica-ressalva\" hidden>⚠️ Estas vagas passaram por terem no título uma palavra de nível júnior (${esc(palavrasJunior)}), mas têm algo que você bloqueou. Para mudar, ajuste os filtros no nó Configurações (<code>palavras_bloqueadas_stack</code>, <code>palavras_prioritarias</code>).</p>`;\nconst conteudo = lista.length\n  ? `${filtros}\\n  <ol class=\"lista\">${cartoes}\\n    </ol>\\n  <p class=\"vazio\" id=\"sem-resultado\" hidden>Nenhuma vaga neste filtro.</p>\\n  <nav class=\"paginas\" id=\"paginas\" aria-label=\"Páginas\"></nav>`\n  : `<p class=\"vazio\">${TEXTO_SEM_VAGAS}</p>`;\n\nconst tileErro = erros\n  ? `<li class=\"erro\"><div class=\"numero\">${erros}</div><div class=\"rotulo\">fonte(s) com problema</div></li>`\n  : '';\n\n// paginação no navegador: mostra 10 cartões por vez e guarda filtro e página no endereço (#com-p2),\n// para o link \"Atualizar\" (location.reload) manter a mesma visão\nconst script = `\n(function () {\n  var POR_PAGINA = 10;\n  var todos = Array.prototype.slice.call(document.querySelectorAll('.lista > li'));\n  var nav = document.getElementById('paginas');\n  var filtros = document.getElementById('filtros');\n  var semResultado = document.getElementById('sem-resultado');\n  if (!nav) return;\n  // o endereço guarda o filtro e a página: #com-p2 = \"com ressalvas\", página 2 (vazio = todas, página 1)\n  function estado() {\n    var m = /^#(?:(com|sem)-?)?(?:p([0-9]+))?$/.exec(location.hash);\n    return { f: (m && m[1]) || 'todas', p: m && m[2] ? parseInt(m[2], 10) : 1 };\n  }\n  function mostrar() {\n    var e = estado();\n    var visiveis = todos.filter(function (li) {\n      var tem = li.getAttribute('data-ressalva') === 'sim';\n      return e.f === 'todas' || (e.f === 'com') === tem;\n    });\n    var total = Math.max(1, Math.ceil(visiveis.length / POR_PAGINA));\n    var p = Math.min(Math.max(e.p, 1), total);\n    todos.forEach(function (li) { li.hidden = true; });\n    visiveis.forEach(function (li, i) { li.hidden = Math.floor(i / POR_PAGINA) + 1 !== p; });\n    if (semResultado) semResultado.hidden = visiveis.length > 0;\n    var dica = document.getElementById('dica-ressalva');\n    if (dica) dica.hidden = e.f !== 'com'; // a explicação só aparece na visão \"Com ressalvas\"\n    var prefixo = e.f === 'todas' ? '' : e.f + '-';\n    nav.innerHTML = '';\n    for (var n = 1; total > 1 && n <= total; n++) {\n      var a = document.createElement('a');\n      a.href = '#' + prefixo + 'p' + n;\n      a.textContent = n;\n      if (n === p) a.setAttribute('aria-current', 'page');\n      nav.appendChild(a);\n    }\n    if (filtros) {\n      Array.prototype.forEach.call(filtros.querySelectorAll('a'), function (a) {\n        if (a.getAttribute('data-f') === e.f) a.setAttribute('aria-current', 'true');\n        else a.removeAttribute('aria-current');\n      });\n    }\n  }\n  window.addEventListener('hashchange', mostrar);\n  mostrar();\n})();`;\n\nconst html = `<!doctype html>\n<html lang=\"pt-BR\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>${NOME} — vagas</title>\n<style>\n  :root {\n    color-scheme: light dark;\n    --bg: #f6f6f4; --card: #ffffff; --texto: #14161a; --suave: #5b6068; --borda: #dcdcd6;\n    --vermelho: #c8102e; --azul: #1b3a8c; --sobre-vermelho: #ffffff;\n  }\n  @media (prefers-color-scheme: dark) {\n    :root {\n      --bg: #101114; --card: #1a1c21; --texto: #f2f2f0; --suave: #a3a8b0; --borda: #2c2f36;\n      --vermelho: #ff5a62; --azul: #8fb0ff; --sobre-vermelho: #14161a;\n    }\n  }\n  * { box-sizing: border-box; }\n  body { margin: 0; background: var(--bg); color: var(--texto); font-family: \"Segoe UI\", system-ui, -apple-system, sans-serif; line-height: 1.5; }\n  main { max-width: 860px; margin: 0 auto; padding: 2rem 1rem 3rem; }\n  header { border-bottom: 4px solid var(--vermelho); padding-bottom: 1rem; margin-bottom: 1.5rem; }\n  h1 { margin: 0; font-family: \"Arial Black\", \"Segoe UI Black\", system-ui, sans-serif; font-size: clamp(1.6rem, 5vw, 2.4rem); text-transform: uppercase; letter-spacing: .02em; line-height: 1.1; }\n  .sub { margin: .4rem 0 0; color: var(--suave); }\n  .sub a { color: var(--azul); font-weight: 700; }\n  .resumo { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; margin: 0 0 1.5rem; padding: 0; list-style: none; }\n  .resumo li { background: var(--card); border: 1px solid var(--borda); border-top: 4px solid var(--azul); border-radius: 8px; padding: .9rem 1rem; }\n  .resumo li.erro { border-top-color: var(--vermelho); }\n  .numero { font-size: 2rem; font-weight: 800; line-height: 1; }\n  .rotulo { color: var(--suave); font-size: .9rem; margin-top: .3rem; }\n  .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: .75rem; }\n  .cartao { display: grid; grid-template-columns: auto 1fr auto; gap: 1rem; align-items: center; background: var(--card); border: 1px solid var(--borda); border-radius: 8px; padding: 1rem; }\n  .cartao[hidden] { display: none; }\n  .nota { min-width: 3.6rem; text-align: center; border-radius: 8px; padding: .5rem .4rem; font-weight: 800; line-height: 1; }\n  .nota span { font-size: 1.7rem; }\n  .nota small { font-size: .8rem; font-weight: 600; }\n  .nota.alta { background: var(--vermelho); color: var(--sobre-vermelho); }\n  .nota.media { border: 2px solid var(--azul); color: var(--azul); }\n  .corpo h2 { margin: 0; font-size: 1.05rem; line-height: 1.3; }\n  .etiqueta { display: inline-block; margin-left: .35rem; padding: .05rem .45rem; border-radius: 4px; background: var(--vermelho); color: var(--sobre-vermelho); font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; vertical-align: middle; }\n  .empresa { margin: .15rem 0 0; font-weight: 600; }\n  .meta { margin: .15rem 0 0; color: var(--suave); font-size: .9rem; }\n  .botao { display: inline-block; padding: .55rem 1rem; border: 2px solid var(--azul); border-radius: 6px; color: var(--azul); font-weight: 700; text-decoration: none; white-space: nowrap; }\n  .botao:hover { background: var(--azul); color: var(--bg); }\n  .botao:focus-visible, .paginas a:focus-visible, .sub a:focus-visible { outline: 3px solid var(--vermelho); outline-offset: 2px; }\n  .filtros { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 1rem; }\n  .filtros a { padding: .4rem .8rem; border: 2px solid var(--azul); border-radius: 6px; color: var(--azul); font-weight: 700; text-decoration: none; }\n  .filtros a[aria-current=\"true\"] { background: var(--azul); color: var(--bg); }\n  .filtros a:focus-visible { outline: 3px solid var(--vermelho); outline-offset: 2px; }\n  .ressalva { margin: .3rem 0 0; font-size: .9rem; font-weight: 600; color: var(--vermelho); }\n  .vazio[hidden], .dica[hidden] { display: none; }\n  .dica { margin: 0 0 1rem; padding: .7rem 1rem; border: 1px solid var(--borda); border-left: 4px solid var(--vermelho); border-radius: 6px; background: var(--card); font-size: .9rem; }\n  .dica code { font-size: .85em; }\n  .paginas { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: 1.25rem; }\n  .paginas a { min-width: 2.4rem; text-align: center; padding: .4rem .7rem; border: 2px solid var(--azul); border-radius: 6px; color: var(--azul); font-weight: 700; text-decoration: none; }\n  .paginas a[aria-current=\"page\"] { background: var(--azul); color: var(--bg); }\n  .vazio { background: var(--card); border: 1px solid var(--borda); border-radius: 8px; padding: 2rem 1rem; text-align: center; color: var(--suave); }\n  footer { margin-top: 2rem; color: var(--suave); font-size: .85rem; }\n  @media (max-width: 560px) {\n    .cartao { grid-template-columns: auto 1fr; }\n    .botao { grid-column: 1 / -1; text-align: center; }\n  }\n</style>\n</head>\n<body>\n<main>\n  <header>\n    <h1>${NOME}</h1>\n    <p class=\"sub\">${NEUTRO ? '' : 'Radar de vagas &middot; '}gerado em ${esc(quando)} &middot; <a href=\"${PREFIXO}alertas.html\">Alertas</a> &middot; <a href=\"#\" onclick=\"location.reload(); return false;\">Atualizar</a> &middot; <a href=\"${N8N_URL}/webhook/rodar-tudo\" target=\"_blank\" rel=\"noopener\">Buscar agora</a></p>\n  </header>\n  <ul class=\"resumo\">\n    <li><div class=\"numero\">${novas.length}</div><div class=\"rotulo\">nova(s) nesta execução</div></li>\n    <li><div class=\"numero\">${lista.length}</div><div class=\"rotulo\">no histórico</div></li>\n    <li><div class=\"numero\">${esc(analisadas)}</div><div class=\"rotulo\">vagas analisadas</div></li>\n    ${tileErro}\n  </ul>\n  ${conteudo}\n  <footer>Fontes: Remotive, RemoteOK e We Work Remotely. Cada vaga leva à página original.</footer>\n</main>\n<script>${script}</script>\n</body>\n</html>`;\n\nreturn [{ json: { fileName: `vagas-${stamp}.html`, html } }];\n"
       }
     },
     {
@@ -426,7 +426,8 @@
             }
           ]
         },
-        "options": {}
+        "options": {},
+        "includeOtherFields": true
       }
     },
     {
@@ -435,7 +436,7 @@
         "postProcessAction": "nothing",
         "format": "resolved",
         "options": {
-          "customEmailConfig": "[[\"OR\",[\"FROM\",\"jobalerts-noreply@linkedin.com\"],[\"OR\",[\"FROM\",\"noreply@glassdoor.com\"],[\"OR\",[\"FROM\",\"jobalert.indeed.com\"],[\"FROM\",\"match.indeed.com\"]]]]]",
+          "customEmailConfig": "[[\"OR\",[\"FROM\",\"jobalerts-noreply@linkedin.com\"],[\"OR\",[\"FROM\",\"noreply@glassdoor.com\"],[\"OR\",[\"FROM\",\"donotreply@jobalert.indeed.com\"],[\"FROM\",\"donotreply@match.indeed.com\"]]]]]",
           "forceReconnect": 60
         }
       },
@@ -497,141 +498,8 @@
     },
     {
       "parameters": {
-        "jsCode": "// FILA DE E-MAILS, parte 1: guarda as vagas extraídas dos e-mails.\n// Nada é enviado agora: a fila fica na memória do workflow (só é gravada com o workflow ATIVO) e é lida no envio\n// das 9h, ao ligar o n8n, ou quando você clica em \"Enviar fila agora\".\nconst TTL_DIAS = 30;   // vaga que ficou mais que isso na fila sem ser enviada é descartada\nconst MAX_FILA = 500;  // tamanho máximo da fila\n\nconst store = $getWorkflowStaticData('global');\nconst agora = Date.now();\nstore.fila = (store.fila || []).filter((v) => agora - (Date.parse(v.naFilaEm) || 0) < TTL_DIAS * 864e5);\n\nlet novas = 0;\nfor (const { json: v } of $input.all()) {\n  if (store.fila.some((f) => f.id === v.id)) continue; // o mesmo e-mail pode ser lido de novo: não duplica\n  store.fila.push({ ...v, naFilaEm: new Date().toISOString() });\n  novas++;\n}\nstore.fila = store.fila.slice(-MAX_FILA);\nreturn [{ json: { novasNaFila: novas, totalNaFila: store.fila.length } }];\n"
-      },
-      "id": "d34414b4-d4fd-459c-8627-985edfaaee63",
-      "name": "Guardar na fila",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        660,
-        1040
-      ],
-      "notes": "Nada é enviado agora: a vaga espera na fila",
-      "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "jsCode": "// FILA DE E-MAILS, parte 2: entrega as vagas da fila para o filtro.\n// Só LÊ: quem esvazia a fila é o nó \"Filtrar, pontuar e deduplicar\", depois de processar com sucesso.\n// Assim, se a execução falhar no meio (ex.: nenhuma API respondeu), as vagas continuam na fila para a próxima.\nconst fila = $getWorkflowStaticData('global').fila || [];\n// Sempre devolve pelo menos 1 item (o marcador \"_fila: vazia\"), para o ramo da fila não parar em silêncio.\nif (!fila.length) return [{ json: { _fila: 'vazia' } }];\nreturn fila.map((v) => ({ json: { ...v, _naFila: true } }));\n"
-      },
-      "id": "3c17819a-dcd8-4538-8fb4-453fc2f13041",
-      "name": "Ler fila",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        330,
-        520
-      ],
-      "notes": "Entrega a fila ao filtro (quem esvazia é o filtro)",
-      "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "httpMethod": "GET",
-        "path": "enviar-fila",
-        "responseMode": "responseNode",
-        "options": {}
-      },
-      "id": "2cb67b70-a7b0-4e1b-b9f9-4bc2855be007",
-      "webhookId": "87516c6f-6eb6-49f8-a1a9-e40700c93e61",
-      "name": "Enviar fila agora",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [
-        0,
-        1560
-      ],
-      "notes": "Botão: abre http://localhost:5678/webhook/enviar-fila (workflow ativo)",
-      "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "respondWith": "text",
-        "responseBody": "<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Enviando a fila</title><style>:root{color-scheme:light dark}body{font-family:\"Segoe UI\",system-ui,sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem;line-height:1.5}h1{border-bottom:4px solid #c8102e;padding-bottom:.5rem}</style></head><body><h1>Fila enviada</h1><p>Pedido recebido: o fluxo est&aacute; processando s&oacute; a fila de e-mails agora (sem chamar as APIs). A mensagem chega no Discord e a p&aacute;gina de vagas &eacute; atualizada em alguns segundos.</p><p>Se a fila estava vazia, chega o aviso de &quot;nenhuma vaga nova&quot;.</p><p><a href=\"/webhook/ver-fila\">Ver fila</a></p></body></html>",
-        "options": {
-          "responseCode": 200,
-          "responseHeaders": {
-            "entries": [
-              {
-                "name": "Content-Type",
-                "value": "text/html; charset=utf-8"
-              }
-            ]
-          }
-        }
-      },
-      "id": "066b488c-0417-45f9-9997-e1d62a0fc222",
-      "name": "Responder (enviar fila)",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [
-        320,
-        1560
-      ]
-    },
-    {
-      "parameters": {
-        "httpMethod": "GET",
-        "path": "ver-fila",
-        "responseMode": "responseNode",
-        "options": {}
-      },
-      "id": "f9f42e32-2f58-4442-b2b0-a973cf685915",
-      "webhookId": "42b37729-51da-4d6b-97fe-01ade1c419d4",
-      "name": "Ver fila",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [
-        0,
-        1720
-      ],
-      "notes": "Botão: abre http://localhost:5678/webhook/ver-fila (workflow ativo)",
-      "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "jsCode": "// BOTÃO \"Ver fila\": mostra o que está esperando na fila de e-mails, SEM enviar e SEM esvaziar.\nconst fila = $getWorkflowStaticData('global').fila || [];\nconst esc = (s) => String(s ?? '').replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[c]));\n\nconst porFonte = {};\nfor (const v of fila) porFonte[v.source] = (porFonte[v.source] || 0) + 1;\nconst resumo = Object.entries(porFonte).map(([f, n]) => `${esc(f)}: ${n}`).join(' · ');\nconst itens = fila.slice(-50).reverse().map((v) =>\n  `<li><strong>${esc(v.title)}</strong> &mdash; ${esc(v.company || 'empresa n/d')}<br><small>${esc(v.source)} &middot; ${esc(v.location || 'local n/d')}</small></li>`).join('');\n\nconst html = `<!doctype html>\n<html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Fila de vagas</title>\n<style>\n  :root { color-scheme: light dark; }\n  body { font-family: \"Segoe UI\", system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }\n  h1 { border-bottom: 4px solid #c8102e; padding-bottom: .5rem; }\n  .botao { display: inline-block; padding: .55rem 1rem; border: 2px solid #1b3a8c; border-radius: 6px; font-weight: 700; text-decoration: none; color: inherit; }\n  li { margin: .6rem 0; }\n</style></head><body>\n<h1>Fila de vagas</h1>\n<p><strong>${fila.length}</strong> vaga(s) esperando${resumo ? ' (' + resumo + ')' : ''}. A fila só guarda vagas que chegaram por e-mail; nada foi enviado nem apagado agora.</p>\n<p><a class=\"botao\" href=\"/webhook/enviar-fila\">Enviar fila agora</a></p>\n${itens ? '<ul>' + itens + '</ul>' + (fila.length > 50 ? '<p><small>Mostrando as 50 mais recentes.</small></p>' : '') : '<p>A fila está vazia.</p>'}\n</body></html>`;\nreturn [{ json: { html, total: fila.length } }];\n"
-      },
-      "id": "5b2e8f66-8ddd-4674-9442-ecc406150c2b",
-      "name": "Contar fila",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        320,
-        1720
-      ],
-      "notes": "Mostra a fila, sem enviar nem esvaziar",
-      "notesInFlow": true
-    },
-    {
-      "parameters": {
-        "respondWith": "text",
-        "responseBody": "={{ $json.html }}",
-        "options": {
-          "responseCode": 200,
-          "responseHeaders": {
-            "entries": [
-              {
-                "name": "Content-Type",
-                "value": "text/html; charset=utf-8"
-              }
-            ]
-          }
-        }
-      },
-      "id": "e0742fb9-e40d-4f26-936a-7218003c9246",
-      "name": "Responder (ver fila)",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [
-        640,
-        1720
-      ]
-    },
-    {
-      "parameters": {
-        "content": "## 📬 Entrada por e-mail → fila\nChega alerta do LinkedIn, Indeed ou Glassdoor (IMAP, Yahoo).\nCada site tem o seu parser; se o e-mail tiver mais vagas do que o parser achou, o nó **falha de propósito** (o workflow de alerta registra).\nAs vagas vão para a **fila** (memória do workflow, só grava com o workflow **ativo**). Nada é enviado agora; o e-mail **não é marcado como lido**.",
-        "height": 600,
+        "content": "## 📬 Entrada por e-mail → filtro → Discord\nChega alerta do LinkedIn, Indeed ou Glassdoor (IMAP, Yahoo). O gatilho só lê os remetentes listados (endereço completo); o e-mail **não é marcado como lido**.\nCada site tem o seu parser; se o e-mail tiver mais vagas do que o parser achou, o nó **falha de propósito** (o workflow de alerta registra).\nAs vagas passam **direto** pelo filtro e, se sobrar vaga nova, o aviso sai na hora. Sem vaga nova, nada é enviado.\nSó grava (já enviadas, histórico) com o workflow **publicado**.",
+        "height": 460,
         "width": 1020,
         "color": 7
       },
@@ -641,35 +509,19 @@
       "typeVersion": 1,
       "position": [
         -40,
-        760
-      ]
-    },
-    {
-      "parameters": {
-        "content": "## 🔘 Botões\n**Ver fila**: mostra quantas vagas esperam, sem enviar.\n**Enviar fila agora**: processa só a fila (sem chamar as APIs) e manda ao Discord e à página, a qualquer hora.\nOs links ficam no topo da página de vagas. Só funcionam com o n8n ligado e o workflow **ativo**.",
-        "height": 480,
-        "width": 1000,
-        "color": 7
-      },
-      "id": "afe799af-2344-4851-b87b-ef62c59e6558",
-      "name": "Nota: botões",
-      "type": "n8n-nodes-base.stickyNote",
-      "typeVersion": 1,
-      "position": [
-        -40,
-        1420
+        880
       ]
     },
     {
       "id": "n-gate-apis",
-      "name": "Rodar as APIs?",
+      "name": "Veio de e-mail?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
         330,
         300
       ],
-      "notes": "Botão \"Enviar fila agora\" pula as APIs (o Remotive limita 4 consultas por dia)",
+      "notes": "Verdadeiro = a execução começou por um e-mail (vai para os parsers). Falso = começou por horário, pelo link \"Buscar agora\" ou por teste (vai para as APIs).",
       "notesInFlow": true,
       "parameters": {
         "conditions": {
@@ -680,8 +532,8 @@
           },
           "conditions": [
             {
-              "id": "n-gate-apis-cond",
-              "leftValue": "={{ !$('Enviar fila agora').isExecuted }}",
+              "id": "n-gate-email-cond",
+              "leftValue": "={{ $('E-mail de alerta (IMAP)').isExecuted }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -694,6 +546,96 @@
         },
         "options": {}
       }
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "rodar-tudo",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "e62ebfae-9440-4a75-87e7-5eb926c056dd",
+      "webhookId": "a0a26922-5e0a-4579-8c34-49c803ab008e",
+      "name": "Rodar tudo",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        760
+      ],
+      "notes": "Roda o fluxo das APIs numa execução própria e curta. O \"Ao ligar\" chama este endereço; você também pode abrir http://localhost:5678/webhook/rodar-tudo no navegador (workflow publicado).",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5678/webhook/rodar-tudo",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "8f053099-511c-4d9c-8784-b4896975e7c4",
+      "name": "Chamar Rodar tudo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        420,
+        600
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Chama o webhook \"Rodar tudo\". A espera de 60 s fica nesta execução (que não grava nada); quem busca as vagas é a execução do webhook, curta. Assim o n8n não apaga, ao terminar, o que o IMAP gravou durante a espera.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "id": "447b1023-d7fd-49ec-8175-c038001e48c4",
+      "name": "Juntar e-mails",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        660,
+        1040
+      ],
+      "notes": "Junta as vagas dos 3 parsers (Glassdoor, LinkedIn, Indeed) e entrega tudo de uma vez ao filtro.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "n-tem-vaga-cond",
+              "leftValue": "={{ $json.vagas.length > 0 || $('Juntar fontes').isExecuted }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a65451ba-ac38-4716-b11d-8ee5eaf5ce50",
+      "name": "Tem vaga?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        270
+      ],
+      "notes": "Verdadeiro se há vaga nova OU se a execução veio das APIs (aí o \"nenhuma vaga nova\" também é enviado). Execução de e-mail sem vaga nova não avisa nada.",
+      "notesInFlow": true
     }
   ],
   "connections": {
@@ -734,7 +676,7 @@
       "main": [
         [
           {
-            "node": "Configurações",
+            "node": "Chamar Rodar tudo",
             "type": "main",
             "index": 0
           }
@@ -811,12 +753,7 @@
       "main": [
         [
           {
-            "node": "Discord configurado?",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Montar página HTML",
+            "node": "Tem vaga?",
             "type": "main",
             "index": 0
           }
@@ -866,30 +803,69 @@
       "main": [
         [
           {
-            "node": "Rodar as APIs?",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Ler fila",
+            "node": "Veio de e-mail?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Ler fila": {
+    "Parser Glassdoor": {
       "main": [
         [
           {
-            "node": "Juntar fontes",
+            "node": "Juntar e-mails",
             "type": "main",
-            "index": 3
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parser LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "Juntar e-mails",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Parser Indeed": {
+      "main": [
+        [
+          {
+            "node": "Juntar e-mails",
+            "type": "main",
+            "index": 2
           }
         ]
       ]
     },
     "E-mail de alerta (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Configurações",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rodar tudo": {
+      "main": [
+        [
+          {
+            "node": "Configurações",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veio de e-mail?": {
       "main": [
         [
           {
@@ -907,82 +883,7 @@
             "type": "main",
             "index": 0
           }
-        ]
-      ]
-    },
-    "Parser Glassdoor": {
-      "main": [
-        [
-          {
-            "node": "Guardar na fila",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Parser LinkedIn": {
-      "main": [
-        [
-          {
-            "node": "Guardar na fila",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Parser Indeed": {
-      "main": [
-        [
-          {
-            "node": "Guardar na fila",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Enviar fila agora": {
-      "main": [
-        [
-          {
-            "node": "Responder (enviar fila)",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Configurações",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Ver fila": {
-      "main": [
-        [
-          {
-            "node": "Contar fila",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Contar fila": {
-      "main": [
-        [
-          {
-            "node": "Responder (ver fila)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Rodar as APIs?": {
-      "main": [
+        ],
         [
           {
             "node": "Remotive (API)",
@@ -996,6 +897,33 @@
           },
           {
             "node": "Feeds WWR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Juntar e-mails": {
+      "main": [
+        [
+          {
+            "node": "Filtrar, pontuar e deduplicar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem vaga?": {
+      "main": [
+        [
+          {
+            "node": "Discord configurado?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Montar página HTML",
             "type": "main",
             "index": 0
           }
