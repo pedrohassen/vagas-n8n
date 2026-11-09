@@ -1,10 +1,13 @@
 # Automação de vagas com n8n
 
-Uma vez por dia, às 9h, o workflow busca vagas, filtra pelo perfil (dev full stack júnior/pleno; JS/TS/React/Node, C#/.NET, IA), tira duplicadas e gera uma **página HTML** com o resultado. Se você configurar um webhook do Discord, ele também **manda uma mensagem lá**: com as vagas novas ("confira no PC o quanto antes") ou, se não houver, "nenhuma vaga nova". O Discord é **opcional**: sem ele (variável vazia), tudo funciona só pelas páginas HTML. Vagas de estágio, sênior/lead e restritas a EUA/Europa são descartadas.
+Todo dia às 9h o workflow busca vagas em APIs públicas e, sempre que chega um alerta de vaga por e-mail, lê o alerta; nos dois casos ele filtra pelo perfil (dev full stack júnior/pleno; JS/TS/React/Node, C#/.NET, IA), tira duplicadas e gera uma **página HTML** com o resultado. Se você configurar um webhook do Discord, ele também **manda uma mensagem lá**: com as vagas novas ("confira no PC o quanto antes") ou, se não houver, "nenhuma vaga nova". O Discord é **opcional**: sem ele (variável vazia), tudo funciona só pelas páginas HTML. Vagas de estágio, sênior/lead e restritas a EUA/Europa são descartadas.
 
-Dois gatilhos disparam a mesma busca:
+Três gatilhos fazem o fluxo rodar:
 - **Todo dia às 9h**, se o n8n estiver ligado.
-- **Ao ligar o n8n** (nó "n8n Trigger", evento *Instance Started*): espera 60 s para a rede subir e roda. Se o PC estava desligado às 9h, a mensagem chega assim que você ligar, com as vagas retroativas pendentes (até 14 dias de idade; a deduplicação garante que nada repete).
+- **Ao ligar o n8n** (nó "n8n Trigger", evento *Instance Started*): espera 60 s para a rede subir e então chama o webhook **Rodar tudo**, que faz a mesma busca das 9h. Se o PC estava desligado às 9h, a mensagem chega assim que você ligar, com as vagas retroativas pendentes (até 14 dias de idade; a deduplicação garante que nada repete).
+- **Chegada de um alerta por e-mail** (LinkedIn, Indeed ou Glassdoor): o alerta passa direto pelo filtro e, se sobrar vaga nova, o aviso sai na hora. Detalhes na seção "Alertas por e-mail".
+
+O link **Buscar agora** no topo da página (ou o endereço `http://localhost:5678/webhook/rodar-tudo`) faz a busca das APIs a qualquer momento.
 
 Ligar o PC depois de já ter recebido a mensagem do dia gera outra mensagem. É de propósito. Para mudar o horário, edite a expressão cron no nó "Todo dia às 9h" (o Remotive aceita até 4 consultas por dia, então não passe disso). Com `--restart unless-stopped` o n8n sobe sozinho quando o Docker abrir.
 
@@ -22,7 +25,7 @@ A página é um arquivo comum da pasta `saida/`: não precisa de servidor. Escol
    - Linux: `file:///home/voce/projetos/vagas-n8n/saida/spider-man-ultimas-vagas.html`
 3. **Extensão Live Server do VS Code** (opcional). Abra a pasta `vagas-n8n` no VS Code e clique em **Go Live**; o endereço fica `http://127.0.0.1:5500/saida/spider-man-ultimas-vagas.html`. Só funciona **enquanto o Live Server estiver ligado**: se o navegador mostrar `ERR_CONNECTION_REFUSED` nesse endereço, é ele que está desligado (use a forma 1 ou 2, que não dependem de nada ligado).
 
-Com `TEMA=neutro` o arquivo se chama `ultimas-vagas.html` (e `alertas.html`): refaça o favorito. Os links "Ver fila" e "Enviar fila agora" no topo da página abrem o n8n em `localhost:5678` e funcionam em qualquer uma das formas, com o n8n ligado e o workflow ativo.
+Com `TEMA=neutro` o arquivo se chama `ultimas-vagas.html` (e `alertas.html`): refaça o favorito. O link "Buscar agora" no topo da página abre o webhook **Rodar tudo** do n8n em `localhost:5678` (roda a busca das APIs agora) e funciona em qualquer uma das formas, com o n8n ligado e o workflow ativo.
 
 Tudo aqui usa só serviços gratuitos: n8n self-hosted, APIs públicas, e-mail por IMAP (Yahoo) e Discord.
 
@@ -33,14 +36,15 @@ Tudo aqui usa só serviços gratuitos: n8n self-hosted, APIs públicas, e-mail p
 
 ## Fluxo
 ```
-Gatilhos (todo dia às 9h / ao ligar o n8n / manual)
- ├─ Remotive (API REST)        ─┐
- ├─ RemoteOK (API REST)         │
- ├─ WeWorkRemotely (3 RSS→XML) ─┼─ Juntar → Filtrar/pontuar/deduplicar (Code) ─┬─ Discord (webhook, opcional)
- └─ Fila de e-mails            ─┘                                              └─ Página HTML → arquivo em saida/ (sempre)
-
-Alertas por e-mail (Yahoo, IMAP) → Parser Glassdoor / LinkedIn / Indeed → Guardar na fila   (só guarda, não envia)
-Botão "Enviar fila agora" (webhook) → roda o fluxo todo agora      Botão "Ver fila" → mostra a fila sem enviar
+Todo dia às 9h ───────────────┐
+Teste manual ─────────────────┤
+Rodar tudo (webhook) ─────────┼─► Configurações ─► Veio de e-mail?
+   ▲ chamado pelo "Ao ligar   │                       │
+     o n8n" após 60 s         │                       ├─ não: Remotive / RemoteOK / WeWorkRemotely ─► Juntar fontes ──┐
+E-mail de alerta (IMAP) ──────┘                       └─ sim: Parser Glassdoor / LinkedIn / Indeed ─► Juntar e-mails ──┤
+                                                                                                                       ▼
+                         Filtrar, pontuar e deduplicar (Code) ─► Tem vaga? ─┬─ Discord (webhook, opcional)
+                                                                            └─ Página HTML → arquivo em saida/ (sempre)
 ```
 
 ## Como usar
@@ -69,27 +73,25 @@ docker compose restart
 ```
 O n8n pede para criar o dono de novo. Confira a mensagem do comando para ver o que ele mantém. Para zerar tudo (apaga também os workflows importados), use `docker compose down -v`.
 
-## Alertas por e-mail (LinkedIn, Indeed, Glassdoor) e a fila
+## Alertas por e-mail (LinkedIn, Indeed, Glassdoor)
 Esta é a fonte que mais importa para vagas no Brasil e para vagas júnior.
 
-**Como funciona:** o nó **E-mail de alerta (IMAP)** fica vigiando a caixa de entrada. Quando chega alerta do LinkedIn, Indeed ou Glassdoor, o parser do site (um nó Code por site, só regex) extrai as vagas e o nó **Guardar na fila** as coloca numa **fila** (memória do workflow). Nada é enviado nessa hora. A fila é lida e esvaziada quando o fluxo roda: às 9h, ao ligar o n8n, ou quando você clica num botão (abaixo). O e-mail **não é marcado como lido** — isso fica com você.
+**Como funciona:** o nó **E-mail de alerta (IMAP)** fica vigiando a caixa de entrada e só lê os remetentes listados na regra dele (endereço **completo**, por exemplo `donotreply@match.indeed.com`; o Yahoo não casou domínio parcial). Quando chega o alerta, ele passa pelo nó **Configurações** (para o filtro ter o seu perfil), pelo parser do site (um nó Code por site, só regex) e pelo **filtro**, igual às vagas das APIs. Se sobrar vaga nova, o aviso sai **na hora** no Discord e a página é atualizada; se não sobrar nada, nada é enviado. O e-mail **não é marcado como lido** — isso fica com você.
+
+**Com o PC desligado**, os e-mails ficam esperando no Yahoo. Quando o n8n volta, o gatilho busca o que chegou nesse tempo e o aviso sai na hora (o "Ao ligar" cuida só das APIs).
 
 **Passo a passo**
 1. Criar alertas diários nos sites (LinkedIn/Indeed com local "Pelotas, RS" e outro "remoto").
 2. Gerar uma **senha de app** no Yahoo (Segurança da conta → *Gerar senha de app*). Não use a senha normal e não a compartilhe.
 3. No n8n: *Credentials → Create → IMAP*. Host `imap.mail.yahoo.com`, porta `993`, SSL ligado, usuário = seu e-mail, senha = a senha de app. Escolher essa credencial no nó **E-mail de alerta (IMAP)**.
-4. Ativar o workflow com **Publish** (a fila só é gravada com o workflow **ativo**, isto é, publicado).
-
-**Botões** (links também no topo da página de vagas; só funcionam com o n8n ligado e o workflow ativo)
-- http://localhost:5678/webhook/ver-fila: mostra quantas vagas esperam, sem enviar nem esvaziar.
-- http://localhost:5678/webhook/enviar-fila: roda o fluxo completo agora (APIs + fila), a qualquer hora. Se a fila estiver vazia, vem o aviso de "nenhuma vaga nova".
+4. Ativar o workflow com **Publish** (o controle do que já foi enviado e o histórico só são gravados com o workflow **ativo**, isto é, publicado).
 
 **Cuidados**
-- O gatilho lê e-mails dos remetentes dos três sites **lidos ou não**: quem evita repetição é o controle por UID do próprio nó (ele guarda o último e-mail processado e descarta os de UID menor ou igual), e não o estado de lido. Você pode ler, apagar ou organizar os e-mails no celular à vontade; um e-mail que chegou com o PC desligado entra na fila quando o n8n voltar, mesmo já lido.
-- Na primeira ativação o n8n pega só e-mails **com a data de hoje em diante** (o nó usa `SINCE` a data da ativação); depois acompanha só os novos, por UID. E-mails de dias anteriores, mesmo não lidos, não entram sozinhos, então a fila começa vazia. Os alertas do dia seguinte entram normalmente.
-- **Para puxar e-mails antigos uma vez (teste ou recuperar atrasados):** abra o nó **E-mail de alerta (IMAP)** → *Add option* → **Track Last Message Id** e desligue; em **Custom Email Rules**, acrescente um critério de data logo antes do último `]`, por exemplo `,["SINCE","01-Nov-2026"]` (formato dia-mês em inglês-ano; sem ele o nó buscaria todos os e-mails dos remetentes desde sempre) → **Publish** de novo. A fila não duplica vagas, porque ignora as já guardadas, e vagas mais velhas que `idade_maxima_dias` são descartadas pelo filtro. Confira em **Ver fila** e, depois, **ligue a opção de volta**, tire o critério `SINCE` e publique de novo: deixada desligada, o nó relê todos os e-mails do período a cada e-mail novo, e vagas já enviadas voltariam a aparecer na fila até o próximo envio.
+- O gatilho lê e-mails dos remetentes dos três sites **lidos ou não**: quem evita repetição é o controle por UID do próprio nó (ele guarda o último e-mail processado e descarta os de UID menor ou igual), e não o estado de lido. Você pode ler, apagar ou organizar os e-mails no celular à vontade; um e-mail que chegou com o PC desligado é processado quando o n8n voltar, mesmo já lido.
+- Na primeira ativação o n8n pega só e-mails **com a data de hoje em diante** (o nó usa `SINCE` a data da ativação); depois acompanha só os novos, por UID. E-mails de dias anteriores, mesmo não lidos, não entram sozinhos. Os alertas do dia seguinte entram normalmente.
+- **Para puxar e-mails antigos uma vez (teste ou recuperar atrasados):** abra o nó **E-mail de alerta (IMAP)** → *Add option* → **Track Last Message Id** e desligue; em **Custom Email Rules**, acrescente um critério de data logo antes do último `]`, por exemplo `,["SINCE","01-Nov-2026"]` (formato dia-mês em inglês-ano; sem ele o nó buscaria todos os e-mails dos remetentes desde sempre) → **Publish** de novo. A repetição é evitada pelo filtro (mesmo id, ou mesma empresa+título, não é enviado de novo) e vagas mais velhas que `idade_maxima_dias` são descartadas. Depois **ligue a opção de volta**, tire o critério `SINCE` e publique de novo: deixada desligada, o nó relê todos os e-mails do período a cada e-mail novo.
 - Se o e-mail tiver mais vagas do que o parser achou, o nó **falha de propósito** (o workflow de alerta registra). É o aviso de que o site mudou o formato do e-mail: ajuste o parser daquele site.
-- Vaga fica no máximo 30 dias na fila; a fila guarda até 500.
+- **Por que existe o webhook "Rodar tudo":** o n8n grava a memória do workflow (o que já foi enviado, o histórico, o último e-mail lido) quando uma execução **termina**, e isso sobrescreve o que outra execução gravou nesse meio-tempo. Se o "Ao ligar" esperasse os 60 s dentro da própria execução, ele apagaria o que o IMAP gravou nesse tempo. Por isso a espera fica numa execução que só chama o webhook, e quem busca as vagas é a execução do webhook (cerca de 3 s).
 - O parser do Indeed ("match") descompacta links com `zlib`, liberado no `docker-compose.yml` por `NODE_FUNCTION_ALLOW_BUILTIN=zlib`. Sem isso ele usa um identificador alternativo (empresa+título).
 
 ## Ajustes
@@ -222,5 +224,5 @@ Pode mexer com segurança em `PENAL_EUA_EUROPA` (0 desliga a penalidade) e nos l
 - A memória de vagas já enviadas (deduplicação) só persiste com o workflow **ativo**. Em execuções manuais ela não é salva, então testes repetidos vão repetir vagas.
 - As fontes internacionais têm poucas vagas júnior; em testes com dados reais de 23/10/2026 nenhuma passou no filtro. O volume deve vir dos e-mails.
 - Remotive e RemoteOK exigem citar a fonte e linkar a vaga original (o resumo já faz isso). Não republique as vagas em outro site.
-- O n8n local só roda com o PC ligado e o Docker aberto. O horário das 9h perdido não é recuperado pelo agendador, mas o gatilho "ao ligar o n8n" cobre isso quando o PC ligar. Os e-mails de alerta ficam esperando no Yahoo (lidos ou não): o gatilho do IMAP deve pegá-los quando o n8n voltar (a confirmar com a caixa real).
+- O n8n local só roda com o PC ligado e o Docker aberto. O horário das 9h perdido não é recuperado pelo agendador, mas o gatilho "ao ligar o n8n" cobre isso quando o PC ligar. Os e-mails de alerta ficam esperando no Yahoo (lidos ou não): o gatilho do IMAP busca quando o n8n voltar e o aviso sai na hora (a confirmar com a caixa real).
 - O n8n sem fuso configurado usa UTC, então o cron das 9h pode disparar em outro horário e as horas das páginas saem trocadas. O `GENERIC_TIMEZONE` do `.env` resolve os dois.
