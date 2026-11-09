@@ -7,7 +7,7 @@ Três gatilhos fazem o fluxo rodar:
 - **Ao ligar o n8n** (nó "n8n Trigger", evento *Instance Started*): espera 60 s para a rede subir e então chama o webhook **Rodar tudo**, que faz a mesma busca das 9h. Se o PC estava desligado às 9h, a mensagem chega assim que você ligar, com as vagas retroativas pendentes (até 14 dias de idade; a deduplicação garante que nada repete).
 - **Chegada de um alerta por e-mail** (LinkedIn, Indeed ou Glassdoor): o alerta passa direto pelo filtro e, se sobrar vaga nova, o aviso sai na hora. Detalhes na seção "Alertas por e-mail".
 
-O link **Buscar agora** no topo da página (ou o endereço `http://localhost:5678/webhook/rodar-tudo`) faz a busca das APIs a qualquer momento.
+O link **Buscar agora** no topo da página (ou o endereço `http://localhost:5678/webhook/rodar-tudo`) faz a busca das APIs a qualquer momento. O navegador mostra uma página "Busca iniciada" (mesmo visual da página de vagas) com o botão **Voltar para as vagas**; o resultado chega ao Discord e à página em alguns segundos.
 
 Ligar o PC depois de já ter recebido a mensagem do dia gera outra mensagem. É de propósito. Para mudar o horário, edite a expressão cron no nó "Todo dia às 9h" (o Remotive aceita até 4 consultas por dia, então não passe disso). Com `--restart unless-stopped` o n8n sobe sozinho quando o Docker abrir.
 
