@@ -105,12 +105,12 @@ O perfil de busca é editado **sem código**, no nó **Configurações** (clique
 | `palavras_do_cargo` | O título precisa ter alguma destas palavras |
 | `palavras_bloqueadas_no_titulo` | **Outra profissão** (devops, qa, sales...): título com alguma destas palavras é descartado |
 | `palavras_bloqueadas_stack` | **Stack indesejada** (java, php...): descartado, a não ser que o título tenha Júnior (passa "com ressalvas") |
-| `palavras_prioritarias` | Palavras que vencem os dois bloqueios acima (vazio por padrão). Ex.: para começar a aplicar para QA, escreva `qa` aqui |
-| `senioridade_excluida` | **Filtro de exclusão por nível** (estágio, sênior, lead...): título com alguma destas palavras é descartado. Para voltar a receber estágio, apague as palavras de estágio (`estagio, estagiario, intern, internship, trainee, apprentice`) daqui. Vazio = não exclui nenhum nível |
-| `palavras_nivel_junior` | Dão +2 pontos e, se o título também tiver stack bloqueada, a vaga passa "com ressalvas". Para tratar estágio como nível de entrada, acrescente `estagio, estagiario` aqui |
-| `anos_muito_alto` | Vaga que pede **esta experiência ou mais** perde bastante nota (padrão `6`) |
-| `anos_alto` | Vaga que pede esta experiência ou mais perde um pouco de nota (padrão `4`) |
-| `anos_baixo` | Vaga que pede **até** esta experiência ganha um pouco de nota (padrão `2`) |
+| `palavras_que_liberam_vaga` | Palavras que vencem os dois bloqueios acima (vazio por padrão). Ex.: para começar a aplicar para QA, escreva `qa` aqui |
+| `senioridade_excluida` | **Filtro de exclusão por nível** (estágio, sênior, lead...): título com alguma destas palavras é descartado. Para voltar a receber estágio, apague as palavras de estágio (`estagio, estagiario, intern, internship, apprentice`) daqui. Vazio = não exclui nenhum nível |
+| `palavras_do_nivel_que_busco` | O **nível que você busca** (padrão: `junior, jr, entry level, trainee`). Título com uma destas palavras ganha +2 pontos e, se também tiver stack bloqueada, passa "com ressalvas". Para tratar estágio como nível buscado, tire as palavras de estágio de `senioridade_excluida` e acrescente `estagio, estagiario` aqui |
+| `nota_cai_muito_a_partir_de_x_anos` | Vaga que pede **esta experiência ou mais** perde bastante nota (padrão `6`) |
+| `nota_cai_a_partir_de_x_anos` | Vaga que pede esta experiência ou mais perde um pouco de nota (padrão `4`) |
+| `nota_sobe_ate_x_anos` | Vaga que pede **até** esta experiência ganha um pouco de nota (padrão `2`) |
 | `locais_aceitos` | Locais aceitos para vagas remotas |
 | `fontes_esperadas` | Fontes que deveriam trazer vagas. Se uma vier vazia, o resumo avisa; se todas vierem vazias, o workflow falha e o alerta registra. Vazio desliga essa conferência |
 
@@ -154,14 +154,14 @@ Antes de tudo, vaga velha demais (`idade_maxima_dias`) ou já enviada antes (mes
 
 | # | Regra | Resultado |
 |---|---|---|
-| 1 | Título tem senioridade excluída (`senioridade_excluida`: estágio, sênior, lead...) | Descarta. Nem Júnior nem palavra prioritária salvam; para mudar, edite o campo |
-| 2 | Título tem outra profissão (`palavras_bloqueadas_no_titulo`) | Descarta, a não ser que tenha palavra de `palavras_prioritarias` |
-| 3 | Título tem stack indesejada (`palavras_bloqueadas_stack`) | Descarta, a não ser que tenha palavra prioritária (passa normal) ou Júnior/Jr (passa **com ressalvas**) |
-| 4 | Vaga de API sem palavra de cargo no título | Descarta (vaga de e-mail e palavra prioritária já contam como cargo) |
+| 1 | Título tem senioridade excluída (`senioridade_excluida`: estágio, sênior, lead...) | Descarta. Nem o nível buscado nem palavra que libera a vaga salvam; para mudar, edite o campo |
+| 2 | Título tem outra profissão (`palavras_bloqueadas_no_titulo`) | Descarta, a não ser que tenha palavra de `palavras_que_liberam_vaga` |
+| 3 | Título tem stack indesejada (`palavras_bloqueadas_stack`) | Descarta, a não ser que tenha palavra que libera a vaga (passa normal) ou palavra do nível buscado (passa **com ressalvas**) |
+| 4 | Vaga de API sem palavra de cargo no título | Descarta (vaga de e-mail e palavra que libera a vaga já contam como cargo) |
 | 5 | Vaga traz local que não está em `locais_aceitos` | Descarta (exceto quando o parser do site garante que é Brasil) |
 | 6 | Nota abaixo de `nota_minima` | Descarta |
 
-**Vaga "com ressalvas"** é a que só passou porque o título tem uma palavra de nível júnior (as de `palavras_nivel_junior`: por padrão Júnior, Jr, entry level), apesar de uma stack bloqueada (ex.: "FullStack (NodeJS / Java) - Junior"). Ela vem depois das normais no Discord, com o motivo ("⚠️ tem "java" (stack bloqueada), mas o título tem "junior" (nível júnior)") e um aviso que lista as palavras de nível júnior configuradas, para você ajustar os filtros no nó Configurações. Se você acrescentar `trainee` em `palavras_nivel_junior`, o texto já passa a citá-lo, sem mexer em código. Na página, o botão **Com ressalvas** filtra essas vagas e mostra a mesma explicação.
+**Vaga "com ressalvas"** é a que só passou porque o título tem uma palavra do nível que você busca (as de `palavras_do_nivel_que_busco`: por padrão Júnior, Jr, entry level e trainee), apesar de uma stack bloqueada (ex.: "FullStack (NodeJS / Java) - Junior"). Ela vem depois das normais no Discord, com o motivo ("⚠️ tem "java" (stack bloqueada), mas o título tem "junior" (nível júnior)") e um aviso que lista as palavras de nível júnior configuradas, para você ajustar os filtros no nó Configurações. Se você acrescentar `trainee` em `palavras_do_nivel_que_busco`, o texto já passa a citá-lo, sem mexer em código. Na página, o botão **Com ressalvas** filtra essas vagas e mostra a mesma explicação.
 
 ### Como a nota funciona
 A nota (0 a 10) é calculada **por nós, com regras fixas e sem IA**, no nó **Filtrar, pontuar e deduplicar**. Nenhum site (Indeed, LinkedIn, Glassdoor...) manda nota. Ela serve para duas coisas: **cortar** (vaga abaixo de `nota_minima` não é enviada) e **ordenar** (maiores notas primeiro, dentro de cada grupo). Não mede "o quanto a vaga é boa": só soma pistas que o título e a descrição dão.
@@ -169,10 +169,10 @@ A nota (0 a 10) é calculada **por nós, com regras fixas e sem IA**, no nó **F
 | Critério | Pontos |
 |---|---|
 | Vaga veio de e-mail (já chega filtrada pelo seu alerta) | +3 |
-| Palavra de cargo no título (`palavras_do_cargo`) ou palavra prioritária | +3 |
+| Palavra de cargo no título (`palavras_do_cargo`) ou palavra que libera a vaga | +3 |
 | Tecnologias do título e da descrição (`tecnologias`, cada uma com seu peso) | soma dos pesos, no máximo +5 |
-| Júnior no título (`palavras_nivel_junior`) ou palavra prioritária | +2 |
-| Descrição pede `anos_muito_alto` ou mais (6) / `anos_alto` ou mais (4) / até `anos_baixo` (2) | −4 / −2 / +1 |
+| Nível buscado no título (`palavras_do_nivel_que_busco`) ou palavra que libera a vaga | +2 |
+| Descrição pede 6 anos ou mais (`nota_cai_muito_a_partir_de_x_anos`) / 4 anos ou mais (`nota_cai_a_partir_de_x_anos`) / até 2 anos (`nota_sobe_ate_x_anos`) | −4 / −2 / +1 |
 | Descrição restringe a EUA, Canadá, Reino Unido ou Europa | −3 |
 
 O total é arredondado e limitado a 0–10. Exemplos (todos conferidos em teste, com os pesos padrão `react: 1.5`, `node: 1.5`):
@@ -198,23 +198,23 @@ Os pesos (as constantes `PESO_*`, `PENAL_*`, `BONUS_*` e `TETO_*` no topo do nó
 
 | Peso (padrão) | Regra que não pode quebrar | Se quebrar |
 |---|---|---|
-| `PESO_CARGO` (3) + `PESO_JUNIOR` (2) | A soma precisa ser **maior ou igual a `nota_minima`** | Vaga de API com palavra prioritária (ex.: `qa`) nunca chega ao corte e some. Foi o caso do "Analista de QA", que ficou com nota 3. |
+| `PESO_CARGO` (3) + `PESO_JUNIOR` (2) | A soma precisa ser **maior ou igual a `nota_minima`** | Vaga de API com palavra que libera a vaga (ex.: `qa`) nunca chega ao corte e some. Foi o caso do "Analista de QA", que ficou com nota 3. |
 | `PESO_EMAIL` (3) | Precisa ficar **abaixo de `nota_minima`** | Toda vaga de e-mail que passa nas regras 1 a 5 é enviada, mesmo sem palavra de cargo: a nota deixa de cortar e só ordena. |
 | `PENAL_ANOS_MUITO_ALTO` (4) | Precisa ser grande o bastante para **cruzar o corte** | Uma vaga Pleno de e-mail parte de 6; com −4 vai a 2 e é cortada, com −1 fica em 5 e passa: a penalidade deixa de funcionar. |
 | `TETO_TECNOLOGIAS` (5) | Não suba muito, não desça de ~2 | Alto: descrição cheia de siglas infla a nota de vaga errada. Baixo: vaga de API não consegue chegar a 5 (cargo vale 3 e precisa de pelo menos 2 das tecnologias). |
 | `BONUS_ANOS_BAIXO` (1) | Mantenha pequeno | Com 3 ou mais, vaga de API que cita "1 year" passa sem nenhuma tecnologia. |
 
-Pode mexer com segurança em `PENAL_EUA_EUROPA` (0 desliga a penalidade) e nos limites de anos (campos em Configurações, desde que `anos_muito_alto` > `anos_alto` > `anos_baixo`).
+Pode mexer com segurança em `PENAL_EUA_EUROPA` (0 desliga a penalidade) e nos limites de anos (campos em Configurações, desde que `nota_cai_muito_a_partir_de_x_anos` > `nota_cai_a_partir_de_x_anos` > `nota_sobe_ate_x_anos`).
 
 **Para receber mais ou menos vagas, mude a `nota_minima` (em Configurações), não os pesos.** Atenção: com `nota_minima` acima de 5, a vaga de API passa a precisar também de tecnologia; acima de 10, nada passa.
 
-**Verificação automática:** se um campo numérico das Configurações estiver vazio, com texto, `nota_minima` fora de 0 a 10 ou os anos fora de ordem, o nó de filtro **falha de propósito** com uma mensagem como `Configurações: o campo "anos_muito_alto" precisa ser um número`. O workflow de alerta registra a falha (Discord e página de alertas). Isso evita uma nota distorcida sem você perceber (um campo vazio, por exemplo, viraria 0 e daria −4 em toda vaga que cita anos).
+**Verificação automática:** se um campo numérico das Configurações estiver vazio, com texto, `nota_minima` fora de 0 a 10 ou os anos fora de ordem, o nó de filtro **falha de propósito** com uma mensagem como `Configurações: o campo "nota_cai_muito_a_partir_de_x_anos" precisa ser um número`. O workflow de alerta registra a falha (Discord e página de alertas). Isso evita uma nota distorcida sem você perceber (um campo vazio, por exemplo, viraria 0 e daria −4 em toda vaga que cita anos).
 
 ### Receitas de perfil
 | Quero... | Faça |
 |---|---|
-| Voltar a receber estágio (pós-graduação, quem busca o primeiro estágio) | Apague as palavras de estágio de `senioridade_excluida`. Para estágio valer como nível de entrada (+2 e liberar stack com ressalva), acrescente `estagio, estagiario` em `palavras_nivel_junior` |
-| Começar a aplicar para QA | Escreva `qa` em `palavras_prioritarias`. Acrescente `cypress: 1.5, selenium: 1.5, playwright: 1.5` em `tecnologias`, para a nota refletir QA |
+| Voltar a receber estágio (pós-graduação, quem busca o primeiro estágio) | Apague as palavras de estágio de `senioridade_excluida`. Para estágio valer como nível buscado (+2 e liberar stack com ressalva), acrescente `estagio, estagiario` em `palavras_do_nivel_que_busco`. O `trainee` já vale como nível buscado por padrão |
+| Começar a aplicar para QA | Escreva `qa` em `palavras_que_liberam_vaga`. Acrescente `cypress: 1.5, selenium: 1.5, playwright: 1.5` em `tecnologias`, para a nota refletir QA |
 | Parar de receber sênior de vez | Já é o padrão: palavras de sênior em `senioridade_excluida` |
 | Aceitar uma stack que hoje é bloqueada (ex.: Java) | Tire a palavra de `palavras_bloqueadas_stack`. Se só quer ser avisado, deixe lá: com Júnior no título ela passa com ressalvas |
 | Aceitar Angular | Acrescente `, angular: 1.5` em `tecnologias` |
