@@ -4,7 +4,7 @@ services:
     container_name: n8n
     restart: unless-stopped          # sobe sozinho quando o Docker abrir
     ports:
-      - "127.0.0.1:5678:5678"        # só este PC acessa (os botões "Ver fila"/"Enviar fila agora" são links do n8n)
+      - "127.0.0.1:5678:5678"        # só este PC acessa (o link "Buscar agora" da página abre o n8n neste endereço)
     environment:
       - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Sao_Paulo}
       - TZ=${GENERIC_TIMEZONE:-America/Sao_Paulo}
