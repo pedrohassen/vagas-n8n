@@ -1,228 +1,153 @@
 # Automação de vagas com n8n
 
-Todo dia às 9h o workflow busca vagas em APIs públicas e, sempre que chega um alerta de vaga por e-mail, lê o alerta; nos dois casos ele filtra pelo perfil (dev full stack júnior/pleno; JS/TS/React/Node, C#/.NET, IA), tira duplicadas e gera uma **página HTML** com o resultado. Se você configurar um webhook do Discord, ele também **manda uma mensagem lá**: com as vagas novas ("confira no PC o quanto antes") ou, se não houver, "nenhuma vaga nova". O Discord é **opcional**: sem ele (variável vazia), tudo funciona só pelas páginas HTML. Vagas de estágio, sênior/lead e restritas a EUA/Europa são descartadas.
+Automação que busca vagas de desenvolvedor, filtra pelo meu perfil e avisa no Discord. Feita com n8n (self-hosted, em Docker), JavaScript e serviços gratuitos.
 
-Três gatilhos fazem o fluxo rodar:
-- **Todo dia às 9h**, se o n8n estiver ligado.
-- **Ao ligar o n8n** (nó "n8n Trigger", evento *Instance Started*): espera 60 s para a rede subir e então chama o webhook **Rodar tudo**, que faz a mesma busca das 9h. Se o PC estava desligado às 9h, a mensagem chega assim que você ligar, com as vagas retroativas pendentes (até 14 dias de idade; a deduplicação garante que nada repete).
-- **Chegada de um alerta por e-mail** (LinkedIn, Indeed ou Glassdoor): o alerta passa direto pelo filtro e, se sobrar vaga nova, o aviso sai na hora. Detalhes na seção "Alertas por e-mail".
+## 1. Sobre o projeto
 
-O link **Buscar agora** no topo da página (ou o endereço `http://localhost:5678/webhook/rodar-tudo`) faz a busca das APIs a qualquer momento. O navegador mostra uma página "Busca iniciada" (mesmo visual da página de vagas) com o botão **Voltar para as vagas**; o resultado chega ao Discord e à página em alguns segundos.
+Procuro recolocação como desenvolvedor full stack júnior/pleno há mais de um ano. Abrir vários sites de vagas todo dia cansa: as mesmas vagas aparecem de novo e a maioria nem serve (sênior, outra área, restrita a EUA ou Europa). Esta automação faz essa triagem por mim.
 
-Ligar o PC depois de já ter recebido a mensagem do dia gera outra mensagem. É de propósito. Para mudar o horário, edite a expressão cron no nó "Todo dia às 9h" (o Remotive aceita até 4 consultas por dia, então não passe disso). Com `--restart unless-stopped` o n8n sobe sozinho quando o Docker abrir.
+**O que ela faz**
+- Busca vagas em duas APIs REST (Remotive e RemoteOK) e em um feed RSS (We Work Remotely).
+- Lê os alertas de vaga que LinkedIn, Indeed e Glassdoor mandam por e-mail (IMAP).
+- Filtra pelo meu perfil (JavaScript/TypeScript, React, Node, C#/.NET; Pelotas/RS ou remoto), descarta estágio, sênior e vagas restritas a EUA/Europa, dá uma **nota de 0 a 10** por regras e tira as repetidas.
+- Avisa no **Discord** (webhook) e gera uma **página HTML** com o histórico das vagas. Quando não há vaga nova, também avisa, para eu saber que rodou.
 
-**Para demonstração:** além do Discord, cada execução grava uma página HTML (`saida/vagas-AAAA-MM-DD_HHMM.html`) com a lista de vagas ou "nenhuma vaga nova". Dá para abrir no navegador na apresentação sem abrir o Discord.
+**Quando roda:** todo dia às 9h; ao ligar o n8n (cobre o dia em que o PC estava desligado às 9h); assim que chega um alerta por e-mail; e sob demanda, por um link.
 
-Além do arquivo com data e hora, toda execução também grava (e sobrescreve) `saida/spider-man-ultimas-vagas.html` (com `TEMA=neutro`, `saida/ultimas-vagas.html`). Abra esse arquivo uma vez e salve nos favoritos do navegador: a página **não se atualiza sozinha** (o recarregamento automático foi retirado porque o navegador perdia o filtro e a página escolhidos). Depois de rodar o workflow, clique em **Atualizar** no topo da página (ou aperte F5): o filtro e a página em que você estava são mantidos.
+Tudo gratuito. Projeto final da disciplina de Automação e Programabilidade em Redes (SENAC, Análise e Desenvolvimento de Sistemas).
 
-### Como abrir a página de vagas (e salvar o favorito)
-A página é um arquivo comum da pasta `saida/`: não precisa de servidor. Escolha **uma** das formas (a 1 é a mais simples):
+Autor: [@pedrohassen](https://github.com/pedrohassen)
 
-1. **Arrastar o arquivo para o navegador.** No Explorador de Arquivos, arraste `saida/spider-man-ultimas-vagas.html` para uma aba do Chrome ou Edge e salve nos favoritos (Ctrl+D). O navegador monta o endereço sozinho.
-2. **Digitar o endereço `file:///`.** É `file:///` + o caminho completo do arquivo, com barras normais (`/`) no lugar das invertidas (`\`). Para pegar o caminho: no Windows, **Shift + botão direito** no arquivo → *Copiar como caminho*; no VS Code, botão direito no arquivo → *Copy Path*. Depois tire as aspas, troque `\` por `/` e coloque `file:///` na frente. Espaços viram `%20`. Exemplos:
-   - Windows: `file:///C:/Users/voce/projetos/vagas-n8n/saida/spider-man-ultimas-vagas.html`
-   - Mac: `file:///Users/voce/projetos/vagas-n8n/saida/spider-man-ultimas-vagas.html`
-   - Linux: `file:///home/voce/projetos/vagas-n8n/saida/spider-man-ultimas-vagas.html`
-3. **Extensão Live Server do VS Code** (opcional). Abra a pasta `vagas-n8n` no VS Code e clique em **Go Live**; o endereço fica `http://127.0.0.1:5500/saida/spider-man-ultimas-vagas.html`. Só funciona **enquanto o Live Server estiver ligado**: se o navegador mostrar `ERR_CONNECTION_REFUSED` nesse endereço, é ele que está desligado (use a forma 1 ou 2, que não dependem de nada ligado).
+## 2. Arquitetura e fluxo
 
-Com `TEMA=neutro` o arquivo se chama `ultimas-vagas.html` (e `alertas.html`): refaça o favorito. O link "Buscar agora" no topo da página abre o webhook **Rodar tudo** do n8n em `localhost:5678` (roda a busca das APIs agora) e funciona em qualquer uma das formas, com o n8n ligado e o workflow ativo.
-
-Tudo aqui usa só serviços gratuitos: n8n self-hosted, APIs públicas, e-mail por IMAP (Yahoo) e Discord.
-
-## Arquivos
-- `workflows/vagas-workflow.json`: workflow principal.
-- `workflows/alerta-de-falha-workflow.json`: avisa no Discord se o principal quebrar.
-- `docker-compose.yml`, `.env.example`: como subir o n8n e quais variáveis preencher.
-
-## Fluxo
-```
-Todo dia às 9h ───────────────┐
-Teste manual ─────────────────┤
-Rodar tudo (webhook) ─────────┼─► Configurações ─► Veio de e-mail?
-   ▲ chamado pelo "Ao ligar   │                       │
-     o n8n" após 60 s         │                       ├─ não: Remotive / RemoteOK / WeWorkRemotely ─► Juntar fontes ──┐
-E-mail de alerta (IMAP) ──────┘                       └─ sim: Parser Glassdoor / LinkedIn / Indeed ─► Juntar e-mails ──┤
-                                                                                                                       ▼
-                         Filtrar, pontuar e deduplicar (Code) ─► Tem vaga? ─┬─ Discord (webhook, opcional)
-                                                                            └─ Página HTML → arquivo em saida/ (sempre)
+```mermaid
+flowchart LR
+  G["Gatilhos<br/>9h · Ao ligar · Rodar tudo · Teste manual"] --> C["Configurações<br/>perfil de busca"]
+  E["E-mail de alerta<br/>(IMAP)"] --> C
+  C --> Q{"Veio de e-mail?"}
+  Q -- não --> A["APIs<br/>Remotive · RemoteOK · WWR"]
+  Q -- sim --> P["Parsers<br/>Glassdoor · LinkedIn · Indeed"]
+  A --> F["Filtrar, pontuar<br/>e deduplicar"]
+  P --> F
+  F --> V{"Tem vaga?"}
+  V --> D["Discord"]
+  V --> H["Página HTML"]
 ```
 
-## Como usar
-1. **Discord (opcional):** no canal onde quer receber, abrir *Editar canal → Integrações → Webhooks → Novo Webhook* e **copiar a URL**. Ela funciona como senha: não vai em nenhum arquivo versionado. Se não usa Discord, pule este passo.
-2. **Variáveis:** copiar `.env.example` para `.env` e, se usar Discord, colar a URL em `DISCORD_WEBHOOK_URL` (vazio = só HTML).
-3. **Subir o n8n** (Docker Desktop aberto), dentro desta pasta:
-   ```powershell
+<details>
+<summary>Ver o canvas completo do n8n</summary>
+
+![Canvas do workflow principal no n8n](docs/img/canvas-n8n.png)
+
+</details>
+
+<details>
+<summary>Ver o canvas do workflow de alerta de falha</summary>
+
+![Canvas do workflow de alerta de falha no n8n](docs/img/canvas-alerta.png)
+
+</details>
+
+**Como o fluxo anda**
+1. **Gatilhos.** Cinco formas de começar: o agendamento das 9h, o *Ao ligar o n8n*, o webhook *Rodar tudo* (usado pelo link "Buscar agora" da página), o *Teste manual* e o alerta de e-mail (IMAP).
+2. **Configurações.** Um nó que só guarda o perfil de busca (palavras, nota mínima, tecnologias, locais). O filtro lê esses valores, então ajustar o perfil é mudar um campo, sem tocar em código.
+3. **Veio de e-mail?** Um condicional: se a execução começou pelo IMAP, segue pelos parsers de e-mail; senão, pelas APIs.
+4. **Fontes.** As APIs e o feed RSS (convertido de XML para JSON) entram em um *Juntar fontes*. Cada e-mail passa por um parser do site de origem, e os três entram em um *Juntar e-mails*. Se uma fonte falha, as outras seguem.
+5. **Filtrar, pontuar e deduplicar.** Descarta o que não serve (senioridade, outra profissão, stack indesejada, local), dá a nota e remove repetidas (mesmo id, ou mesma empresa e título).
+6. **Saídas.** Com vaga nova, o aviso vai ao Discord e a página HTML é atualizada. Nas rodadas das APIs sem vaga nova, o Discord recebe "nenhuma vaga nova". Num e-mail sem vaga nova, nada é enviado.
+7. **Ao ligar o n8n.** Espera 60 s para a rede subir e chama o *Rodar tudo*. Essa volta é de propósito: o n8n grava a memória do workflow (vagas já enviadas, histórico, último e-mail lido) quando a execução termina, então, se a espera ficasse dentro da mesma execução, ela sobrescreveria o que um alerta de e-mail gravou nesse meio-tempo.
+
+Um segundo workflow, de **alerta de falha**, avisa no Discord e registra numa página quando o principal quebra.
+
+### Requisitos da disciplina
+
+| Requisito | Como o projeto cumpre |
+|---|---|
+| Motor n8n e/ou Python | n8n, com JavaScript nos nós de código (parsers, filtro, nota, páginas) |
+| Dois ou mais serviços em rede | REST (Remotive, RemoteOK), RSS/XML (We Work Remotely), IMAP (Yahoo) e webhook HTTP do Discord |
+| Dados estruturados com lógica | JSON e XML→JSON, condicionais, filtro por regras, nota de 0 a 10 e deduplicação |
+| Credenciais sem hardcode | A URL do webhook fica no `.env` (fora do Git); a senha do e-mail fica só no cofre de credenciais do n8n; o JSON exportado não tem segredo |
+| Gatilho automático e saída concreta | Agendamento, *Ao ligar*, e-mail e webhook; saída em mensagem no Discord e página HTML |
+| Tratamento de erros | 3 tentativas com limite de 15 s por pedido, e a execução segue sem a fonte que falhou; se nenhuma fonte trouxer vagas, o filtro falha de propósito e o workflow de alerta avisa |
+
+### Limitações conhecidas
+- Nos alertas de e-mail do LinkedIn e do Glassdoor só vêm título, empresa, local e link. O nível da vaga (por exemplo, sênior), que costuma estar na descrição, não entra na análise, então uma vaga sênior com título neutro pode passar. Vale conferir a descrição ao abrir.
+- A nota é por regras (palavras e anos de experiência citados), não por IA.
+- A memória das vagas já enviadas só persiste com o workflow publicado; execuções manuais não gravam.
+- As fontes internacionais trazem poucas vagas júnior; o volume vem mais dos e-mails.
+- O n8n local só roda com o PC e o Docker ligados. O gatilho *Ao ligar* recupera o que passou, e os e-mails ficam esperando no provedor.
+
+## 3. Tecnologias e APIs
+
+| Tecnologia | Para que serve | Custo |
+|---|---|---|
+| n8n (self-hosted) | Orquestra os fluxos | Grátis |
+| Docker e Docker Compose | Roda o n8n de forma isolada e reproduzível | Grátis |
+| JavaScript (nós Code) | Parsers de e-mail, filtro, nota e páginas HTML | Grátis |
+| [Remotive API](https://remotive.com/api/remote-jobs) | Vagas remotas de software, em JSON | Grátis (até 4 consultas por dia) |
+| [RemoteOK API](https://remoteok.com/api) | Vagas remotas, em JSON | Grátis |
+| [We Work Remotely](https://weworkremotely.com) (RSS) | Vagas de programação, 3 feeds em XML | Grátis |
+| IMAP (Yahoo) | Lê os alertas de LinkedIn, Indeed e Glassdoor | Grátis |
+| Discord (webhook) | Avisos de vagas e de falhas | Grátis |
+
+Remotive e RemoteOK pedem que a fonte seja citada e que se linke a vaga original: o resumo já faz isso. Não republico as vagas em outro site.
+
+## 4. Pré-requisitos e como executar
+
+**Pré-requisitos:** Docker Desktop (ou Docker com Compose). Opcionais: um webhook de canal do Discord e uma conta de e-mail com IMAP e senha de app, para os alertas de vaga.
+
+1. **Clonar o repositório:**
+   ```bash
+   git clone https://github.com/pedrohassen/vagas-n8n.git
+   cd vagas-n8n
+   ```
+2. **Criar o `.env`** a partir do exemplo (ele não vai para o Git):
+   ```bash
+   cp .env.example .env
+   ```
+   No PowerShell: `Copy-Item .env.example .env`.
+3. **Preencher o `.env`:**
+
+   | Variável | Para que serve |
+   |---|---|
+   | `DISCORD_WEBHOOK_URL` | URL do webhook do canal (opcional; vazio = só a página HTML). Funciona como senha |
+   | `DISCORD_AVATAR_URL` | Foto que aparece nas mensagens (opcional) |
+   | `TEMA` | `aranha` (padrão) ou `neutro` |
+   | `GENERIC_TIMEZONE` | Fuso horário (padrão `America/Sao_Paulo`) |
+
+4. **Subir o n8n:**
+   ```bash
    docker compose up -d
    ```
-   Ele volta sozinho quando o Docker abrir. Abrir http://localhost:5678 e criar a conta local do n8n. Os dados ficam no volume `n8n_data`; as páginas HTML geradas caem em `saida/`.
-4. **Importar:** em *Workflows → Import from file*, importar os dois JSON de `workflows/`.
-5. **Testar:** abrir o workflow principal e executar o gatilho **Teste manual**. Conferir a página em `saida/spider-man-ultimas-vagas.html` (ou `ultimas-vagas.html`, no tema neutro) e, se usa Discord, a mensagem no canal.
-6. **Ativar:** no principal, *Settings → Error workflow* → "alerta de falha". Depois ativar os dois: no n8n 2.x o botão no canto superior direito se chama **Publish** (nas versões 1.x era **Active**). Comece pelo alerta de falha. Para desligar, **Unpublish**. "Workflow ativo" neste README significa "publicado".
+   Abrir http://localhost:5678 e criar a conta local do n8n.
+5. **Importar os dois workflows:** *Workflows → Import from file* com `workflows/vagas-workflow.json` e `workflows/alerta-de-falha-workflow.json`.
+6. **Criar a credencial do IMAP** (opcional, só para os alertas por e-mail): *Credentials → Create → IMAP*, com o host do provedor, a porta 993 e uma senha de app. Depois escolher essa credencial no nó *E-mail de alerta (IMAP)*. O passo a passo para o Yahoo está em [`docs/configuracao.md`](docs/configuracao.md).
+7. **Ligar o alerta de falha:** no workflow principal, *Settings → Error workflow* → "alerta de falha". Publicar os dois workflows (*Publish*), começando pelo de alerta.
+8. **Testar:** abrir o workflow principal e executar o gatilho **Teste manual**. Conferir a mensagem no Discord e a página `saida/spider-man-ultimas-vagas.html`.
 
-**Histórico e paginação:** a página inicial lembra as últimas 200 vagas (mais novas primeiro, 10 por página, com a etiqueta "Nova" nas da última execução). O histórico fica na memória do n8n e só é gravado nas execuções automáticas, com o workflow ativo.
+Para ajustar o perfil de busca (palavras, nota mínima, tecnologias), ver [`docs/configuracao.md`](docs/configuracao.md).
 
-**Página de alertas:** quando o workflow principal falha, o workflow de alerta avisa no Discord e registra a falha, com data e hora, em `saida/spider-man-alertas.html` (ou `alertas.html`, no tema neutro) (últimas 50). As duas páginas têm link uma para a outra. Para gerar a página de alertas sem ter uma falha, execute o gatilho **Gerar página de alertas** do workflow de alerta.
+## 5. Demonstração
 
-## Conta local do n8n e senha esquecida
-A conta criada no primeiro acesso é **local**: o e-mail não é verificado (pode ser fictício) e a senha fica só no seu PC. Não existe recuperação por e-mail, então anote a senha.
+![Demonstração do fluxo funcionando](docs/img/demo.gif)
 
-Se esquecer, dentro desta pasta:
-```powershell
-docker exec -u node -it n8n n8n user-management:reset
-docker compose restart
-```
-O n8n pede para criar o dono de novo. Confira a mensagem do comando para ver o que ele mantém. Para zerar tudo (apaga também os workflows importados), use `docker compose down -v`.
+**Discord:** o aviso de vagas novas e o de "nenhuma vaga nova".
 
-## Alertas por e-mail (LinkedIn, Indeed, Glassdoor)
-Esta é a fonte que mais importa para vagas no Brasil e para vagas júnior.
+![Mensagem no Discord](docs/img/discord.png)
 
-**Como funciona:** o nó **E-mail de alerta (IMAP)** fica vigiando a caixa de entrada e só lê os remetentes listados na regra dele (endereço **completo**, por exemplo `donotreply@match.indeed.com`; o Yahoo não casou domínio parcial). Quando chega o alerta, ele passa pelo nó **Configurações** (para o filtro ter o seu perfil), pelo parser do site (um nó Code por site, só regex) e pelo **filtro**, igual às vagas das APIs. Se sobrar vaga nova, o aviso sai **na hora** no Discord e a página é atualizada; se não sobrar nada, nada é enviado. O e-mail **não é marcado como lido** — isso fica com você.
+**Página de vagas:** histórico das últimas 200 vagas, com nota, filtros e link para a vaga original.
 
-**Com o PC desligado**, os e-mails ficam esperando no Yahoo. Quando o n8n volta, o gatilho busca o que chegou nesse tempo e o aviso sai na hora (o "Ao ligar" cuida só das APIs).
+![Página de vagas](docs/img/pagina-vagas.png)
 
-**Passo a passo**
-1. Criar alertas diários nos sites (LinkedIn/Indeed com local "Pelotas, RS" e outro "remoto").
-2. Gerar uma **senha de app** no Yahoo (Segurança da conta → *Gerar senha de app*). Não use a senha normal e não a compartilhe.
-3. No n8n: *Credentials → Create → IMAP*. Host `imap.mail.yahoo.com`, porta `993`, SSL ligado, usuário = seu e-mail, senha = a senha de app. Escolher essa credencial no nó **E-mail de alerta (IMAP)**.
-4. Ativar o workflow com **Publish** (o controle do que já foi enviado e o histórico só são gravados com o workflow **ativo**, isto é, publicado).
+**Alerta de falha:** quando o workflow principal falha, o alerta avisa no Discord e registra a falha, com data, workflow, nó e erro, nesta página (guarda as últimas 50). Os exemplos abaixo vêm de uma falha provocada de propósito, por um workflow de teste que chama um endereço inexistente.
 
-**Cuidados**
-- O gatilho lê e-mails dos remetentes dos três sites **lidos ou não**: quem evita repetição é o controle por UID do próprio nó (ele guarda o último e-mail processado e descarta os de UID menor ou igual), e não o estado de lido. Você pode ler, apagar ou organizar os e-mails no celular à vontade; um e-mail que chegou com o PC desligado é processado quando o n8n voltar, mesmo já lido.
-- Na primeira ativação o n8n pega só e-mails **com a data de hoje em diante** (o nó usa `SINCE` a data da ativação); depois acompanha só os novos, por UID. E-mails de dias anteriores, mesmo não lidos, não entram sozinhos. Os alertas do dia seguinte entram normalmente.
-- **Para puxar e-mails antigos uma vez (teste ou recuperar atrasados):** abra o nó **E-mail de alerta (IMAP)** → *Add option* → **Track Last Message Id** e desligue; em **Custom Email Rules**, acrescente um critério de data logo antes do último `]`, por exemplo `,["SINCE","01-Nov-2026"]` (formato dia-mês em inglês-ano; sem ele o nó buscaria todos os e-mails dos remetentes desde sempre) → **Publish** de novo. A repetição é evitada pelo filtro (mesmo id, ou mesma empresa+título, não é enviado de novo) e vagas mais velhas que `idade_maxima_dias` são descartadas. Depois **ligue a opção de volta**, tire o critério `SINCE` e publique de novo: deixada desligada, o nó relê todos os e-mails do período a cada e-mail novo.
-- Se o e-mail tiver mais vagas do que o parser achou, o nó **falha de propósito** (o workflow de alerta registra). É o aviso de que o site mudou o formato do e-mail: ajuste o parser daquele site.
-- **Por que existe o webhook "Rodar tudo":** o n8n grava a memória do workflow (o que já foi enviado, o histórico, o último e-mail lido) quando uma execução **termina**, e isso sobrescreve o que outra execução gravou nesse meio-tempo. Se o "Ao ligar" esperasse os 60 s dentro da própria execução, ele apagaria o que o IMAP gravou nesse tempo. Por isso a espera fica numa execução que só chama o webhook, e quem busca as vagas é a execução do webhook (cerca de 3 s).
-- O parser do Indeed ("match") descompacta links com `zlib`, liberado no `docker-compose.yml` por `NODE_FUNCTION_ALLOW_BUILTIN=zlib`. Sem isso ele usa um identificador alternativo (empresa+título).
+![Aviso de falha no Discord](docs/img/alerta-discord.png)
 
-## Ajustes
-O perfil de busca é editado **sem código**, no nó **Configurações** (clique no nó e mude os campos). Cada lista é separada por vírgula, sem se preocupar com acento ou maiúscula:
+![Página de alertas](docs/img/alerta-falha.png)
 
-| Campo | O que faz |
-|---|---|
-| `nota_minima` | Vagas com nota menor que isso não são enviadas |
-| `idade_maxima_dias` | Ignora vagas publicadas há mais dias que isso |
-| `tecnologias` | `palavra: peso`. Use `/` para sinônimos (`node/nodejs: 1.5`). Para aceitar Angular: acrescente `, angular: 1.5` |
-| `palavras_do_cargo` | O título precisa ter alguma destas palavras |
-| `palavras_bloqueadas_no_titulo` | **Outra profissão** (devops, qa, sales...): título com alguma destas palavras é descartado |
-| `palavras_bloqueadas_stack` | **Stack indesejada** (java, php...): descartado, a não ser que o título tenha Júnior (passa "com ressalvas") |
-| `palavras_que_liberam_vaga` | Palavras que vencem os dois bloqueios acima (vazio por padrão). Ex.: para começar a aplicar para QA, escreva `qa` aqui |
-| `senioridade_excluida` | **Filtro de exclusão por nível** (estágio, sênior, lead...): título com alguma destas palavras é descartado. Para voltar a receber estágio, apague as palavras de estágio (`estagio, estagiario, intern, internship, apprentice`) daqui. Vazio = não exclui nenhum nível |
-| `palavras_do_nivel_que_busco` | O **nível que você busca** (padrão: `junior, jr, entry level, trainee`). Título com uma destas palavras ganha +2 pontos e, se também tiver stack bloqueada, passa "com ressalvas". Para tratar estágio como nível buscado, tire as palavras de estágio de `senioridade_excluida` e acrescente `estagio, estagiario` aqui |
-| `nota_cai_muito_a_partir_de_x_anos` | Vaga que pede **esta experiência ou mais** perde bastante nota (padrão `6`) |
-| `nota_cai_a_partir_de_x_anos` | Vaga que pede esta experiência ou mais perde um pouco de nota (padrão `4`) |
-| `nota_sobe_ate_x_anos` | Vaga que pede **até** esta experiência ganha um pouco de nota (padrão `2`) |
-| `locais_aceitos` | Locais aceitos para vagas remotas |
-| `fontes_esperadas` | Fontes que deveriam trazer vagas. Se uma vier vazia, o resumo avisa; se todas vierem vazias, o workflow falha e o alerta registra. Vazio desliga essa conferência |
+**Para ver funcionando:** no n8n, executar o *Teste manual*, ou abrir o link "Buscar agora" no topo da página de vagas. O resultado chega ao Discord e à página em poucos segundos.
 
-As palavras valem como palavra inteira (`java` não pega `javascript`).
-
-### Onde cada ajuste mora (três camadas)
-Nem tudo está no nó Configurações, de propósito. O critério: **o que muda porque você muda fica em Configurações; o que muda só quando o sistema muda fica no código; o que muda com a máquina fica no `.env`.**
-
-| Camada | O que é | Exemplos | Onde editar |
-|---|---|---|---|
-| **Perfil** (muda com você, com o tempo) | Quem você é e o que procura | palavras, nota mínima, tecnologias, locais, **limites de anos de experiência** | nó **Configurações**, sem código |
-| **Regra de negócio** (muda com o sistema) | Como o sistema decide | pesos da nota (+3, +2, −4...), tamanho da mensagem, quanto tempo lembrar vaga enviada, regra de EUA/Europa | constantes comentadas no topo do nó **Filtrar, pontuar e deduplicar** (nomes `PESO_*`, `PENAL_*`) |
-| **Ambiente** (muda com a máquina) | Onde o n8n roda | fuso horário, URL do webhook do Discord, foto do bot | arquivo `.env` |
-
-Exemplo de por que os anos foram divididos: o **limite** (6, 4, 2 anos) é perfil, porque depende da sua experiência e vai mudar com o tempo (daqui a um ano você pode aceitar vaga de 4 anos sem desconto). Já o **desconto** (−4, −2, +1) é regra de negócio: é quanto cada faixa pesa na fórmula da nota.
-
-**Fica fora do nó Configurações por já ter lugar próprio:** horário das 9h, espera de 60 s, tentativas de cada fonte (3, com 1,5 s entre elas e limite de 15 s), endereços das APIs/RSS e remetentes dos e-mails são **parâmetros do nó** correspondente na interface do n8n (nada escondido em código). Os **parsers** de e-mail são regex do formato de cada site: quando o site muda o e-mail, o ajuste é no código do parser.
-
-**Fuso horário:** vem de `GENERIC_TIMEZONE` no `.env`. Ele vale para o gatilho das 9h e também para as datas e horas da mensagem, das páginas e dos nomes de arquivo. Sem a variável, o código usa Brasília (`America/Sao_Paulo`).
-
-### Tema: Homem-Aranha ou neutro
-As mensagens, as páginas e os nomes de arquivo vêm com a identidade do **Homem-Aranha** ("Meu Sentido de Aranha", autor "Spider-Man" no Discord, arquivos `spider-man-*.html`). É o padrão e não precisa fazer nada. Para **neutralizar** (por exemplo, para reaproveitar o projeto sem o personagem):
-
-1. No arquivo `.env`, escreva `TEMA=neutro`.
-2. Se usa Discord, troque também a foto em `DISCORD_AVATAR_URL` (ou deixe vazio: o autor da mensagem sai sem foto).
-3. Aplique: `docker compose up -d`.
-
-| | `TEMA=aranha` (padrão) | `TEMA=neutro` |
-|---|---|---|
-| Autor no Discord | Spider-Man | Radar de Vagas |
-| Aviso de vagas | "🕷️ Meu Sentido de Aranha disparou!! 7 vaga(s) nova(s)..." | "🔔 Radar de Vagas: 7 vaga(s) nova(s)..." |
-| Sem vagas | "...sentido de aranha calmo, nenhuma vaga nova..." | "...nenhuma vaga nova por enquanto..." |
-| Aviso de falha | "🕸️ Oh não! Meu atirador de teia falhou!" | "⚠️ Falha na automação." |
-| Título das páginas | Meu Sentido de Aranha | Radar de Vagas |
-| Arquivos | `spider-man-ultimas-vagas.html`, `spider-man-alertas.html` | `ultimas-vagas.html`, `alertas.html` |
-
-Trocar o tema muda os nomes de arquivo: atualize o favorito do navegador e, se quiser, apague os arquivos antigos de `saida/`. Para criar um tema seu, edite os textos que começam com `const NEUTRO = $env.TEMA === 'neutro'` nos nós **Filtrar, pontuar e deduplicar**, **Montar página HTML** e **Montar página de alerta**, e os nós de Discord dos dois workflows. Sem imagem da Marvel no repositório: só texto, cores e tipografia, e a foto do bot vem do `.env`.
-
-### Como o filtro decide
-Antes de tudo, vaga velha demais (`idade_maxima_dias`) ou já enviada antes (mesmo id, ou mesma empresa+título) é ignorada. Depois, as regras abaixo rodam **nesta ordem**; a primeira que barrar descarta a vaga (o mesmo roteiro está comentado no topo do código do nó):
-
-| # | Regra | Resultado |
-|---|---|---|
-| 1 | Título tem senioridade excluída (`senioridade_excluida`: estágio, sênior, lead...) | Descarta. Nem o nível buscado nem palavra que libera a vaga salvam; para mudar, edite o campo |
-| 2 | Título tem outra profissão (`palavras_bloqueadas_no_titulo`) | Descarta, a não ser que tenha palavra de `palavras_que_liberam_vaga` |
-| 3 | Título tem stack indesejada (`palavras_bloqueadas_stack`) | Descarta, a não ser que tenha palavra que libera a vaga (passa normal) ou palavra do nível buscado (passa **com ressalvas**) |
-| 4 | Vaga de API sem palavra de cargo no título | Descarta (vaga de e-mail e palavra que libera a vaga já contam como cargo) |
-| 5 | Vaga traz local que não está em `locais_aceitos` | Descarta (exceto quando o parser do site garante que é Brasil) |
-| 6 | Nota abaixo de `nota_minima` | Descarta |
-
-**Vaga "com ressalvas"** é a que só passou porque o título tem uma palavra do nível que você busca (as de `palavras_do_nivel_que_busco`: por padrão Júnior, Jr, entry level e trainee), apesar de uma stack bloqueada (ex.: "FullStack (NodeJS / Java) - Junior"). Ela vem depois das normais no Discord, com o motivo ("⚠️ tem "java" (stack bloqueada), mas o título tem "junior" (nível júnior)") e um aviso que lista as palavras de nível júnior configuradas, para você ajustar os filtros no nó Configurações. Se você acrescentar `trainee` em `palavras_do_nivel_que_busco`, o texto já passa a citá-lo, sem mexer em código. Na página, o botão **Com ressalvas** filtra essas vagas e mostra a mesma explicação.
-
-### Como a nota funciona
-A nota (0 a 10) é calculada **por nós, com regras fixas e sem IA**, no nó **Filtrar, pontuar e deduplicar**. Nenhum site (Indeed, LinkedIn, Glassdoor...) manda nota. Ela serve para duas coisas: **cortar** (vaga abaixo de `nota_minima` não é enviada) e **ordenar** (maiores notas primeiro, dentro de cada grupo). Não mede "o quanto a vaga é boa": só soma pistas que o título e a descrição dão.
-
-| Critério | Pontos |
-|---|---|
-| Vaga veio de e-mail (já chega filtrada pelo seu alerta) | +3 |
-| Palavra de cargo no título (`palavras_do_cargo`) ou palavra que libera a vaga | +3 |
-| Tecnologias do título e da descrição (`tecnologias`, cada uma com seu peso) | soma dos pesos, no máximo +5 |
-| Nível buscado no título (`palavras_do_nivel_que_busco`) ou palavra que libera a vaga | +2 |
-| Descrição pede 6 anos ou mais (`nota_cai_muito_a_partir_de_x_anos`) / 4 anos ou mais (`nota_cai_a_partir_de_x_anos`) / até 2 anos (`nota_sobe_ate_x_anos`) | −4 / −2 / +1 |
-| Descrição restringe a EUA, Canadá, Reino Unido ou Europa | −3 |
-
-O total é arredondado e limitado a 0–10. Exemplos (todos conferidos em teste, com os pesos padrão `react: 1.5`, `node: 1.5`):
-
-| Vaga | Conta | Nota |
-|---|---|---|
-| E-mail: "Desenvolvedor Fullstack Node Júnior" | 3 + 3 + 1,5 (node) + 2 (júnior) = 9,5 | 10 |
-| E-mail: "Desenvolvedor React Pleno" | 3 + 3 + 1,5 (react) = 7,5 | 8 |
-| E-mail: "Desenvolvedor Java Júnior" | 3 + 3 + 0 + 2 = 8 (passa **com ressalvas**) | 8 |
-| API: "Full Stack Developer", descrição "React and Node, 3 years" | 0 + 3 + 3 (react + node) = 6 | 6 |
-| API: mesma vaga, "1 year of experience" | 6 + 1 (até 2 anos) = 7 | 7 |
-| API: mesma vaga, "7 years of experience" | 6 − 4 = 2, abaixo da nota mínima 5 | fora |
-
-Pontos de atenção:
-- **A nota de e-mail é inflada.** O e-mail só traz o título, então toda vaga de e-mail com palavra de cargo já começa em 6. Para ela, o que realmente decide é o filtro (regras 1 a 5); a nota serve mais para ordenar.
-- **Vaga de API parte do zero**, e só chega a 5 com cargo + tecnologia ou Júnior. Por isso o ajuste fino de `tecnologias` importa mais para as APIs.
-- Os **pesos** (+3, +3, +2, teto de +5, −4/−2/+1 e −3) são regra de negócio: ficam como constantes comentadas no topo do nó (`PESO_EMAIL`, `PESO_CARGO`, `PESO_JUNIOR`, `TETO_TECNOLOGIAS`, `PENAL_ANOS_MUITO_ALTO`, `PENAL_ANOS_ALTO`, `BONUS_ANOS_BAIXO`, `PENAL_EUA_EUROPA`). As palavras, os pesos de cada tecnologia e os **limites de anos** ficam no nó Configurações.
-- O critério de anos usa o **maior número** que aparece no texto seguido de "years" ou "anos". "5 anos de mercado" na descrição da empresa também conta, então é uma heurística. Nos e-mails quase não há descrição, então ele pesa mais nas vagas das APIs.
-- É um ajuste de nota, não um corte: a vaga só cai se a nota final ficar abaixo de `nota_minima`.
-
-### Pesos da nota: o que não mexer sem entender
-Os pesos (as constantes `PESO_*`, `PENAL_*`, `BONUS_*` e `TETO_*` no topo do nó **Filtrar, pontuar e deduplicar**) são **regra de negócio**: um depende do outro e da `nota_minima`. Mudar um sozinho, sem entender, pode fazer o filtro parar de cortar ou cortar tudo. Valores padrão e a regra que cada um precisa respeitar (com `nota_minima` = 5):
-
-| Peso (padrão) | Regra que não pode quebrar | Se quebrar |
-|---|---|---|
-| `PESO_CARGO` (3) + `PESO_JUNIOR` (2) | A soma precisa ser **maior ou igual a `nota_minima`** | Vaga de API com palavra que libera a vaga (ex.: `qa`) nunca chega ao corte e some. Foi o caso do "Analista de QA", que ficou com nota 3. |
-| `PESO_EMAIL` (3) | Precisa ficar **abaixo de `nota_minima`** | Toda vaga de e-mail que passa nas regras 1 a 5 é enviada, mesmo sem palavra de cargo: a nota deixa de cortar e só ordena. |
-| `PENAL_ANOS_MUITO_ALTO` (4) | Precisa ser grande o bastante para **cruzar o corte** | Uma vaga Pleno de e-mail parte de 6; com −4 vai a 2 e é cortada, com −1 fica em 5 e passa: a penalidade deixa de funcionar. |
-| `TETO_TECNOLOGIAS` (5) | Não suba muito, não desça de ~2 | Alto: descrição cheia de siglas infla a nota de vaga errada. Baixo: vaga de API não consegue chegar a 5 (cargo vale 3 e precisa de pelo menos 2 das tecnologias). |
-| `BONUS_ANOS_BAIXO` (1) | Mantenha pequeno | Com 3 ou mais, vaga de API que cita "1 year" passa sem nenhuma tecnologia. |
-
-Pode mexer com segurança em `PENAL_EUA_EUROPA` (0 desliga a penalidade) e nos limites de anos (campos em Configurações, desde que `nota_cai_muito_a_partir_de_x_anos` > `nota_cai_a_partir_de_x_anos` > `nota_sobe_ate_x_anos`).
-
-**Para receber mais ou menos vagas, mude a `nota_minima` (em Configurações), não os pesos.** Atenção: com `nota_minima` acima de 5, a vaga de API passa a precisar também de tecnologia; acima de 10, nada passa.
-
-**Verificação automática:** se um campo numérico das Configurações estiver vazio, com texto, `nota_minima` fora de 0 a 10 ou os anos fora de ordem, o nó de filtro **falha de propósito** com uma mensagem como `Configurações: o campo "nota_cai_muito_a_partir_de_x_anos" precisa ser um número`. O workflow de alerta registra a falha (Discord e página de alertas). Isso evita uma nota distorcida sem você perceber (um campo vazio, por exemplo, viraria 0 e daria −4 em toda vaga que cita anos).
-
-### Receitas de perfil
-| Quero... | Faça |
-|---|---|
-| Voltar a receber estágio (pós-graduação, quem busca o primeiro estágio) | Apague as palavras de estágio de `senioridade_excluida`. Para estágio valer como nível buscado (+2 e liberar stack com ressalva), acrescente `estagio, estagiario` em `palavras_do_nivel_que_busco`. O `trainee` já vale como nível buscado por padrão |
-| Começar a aplicar para QA | Escreva `qa` em `palavras_que_liberam_vaga`. Acrescente `cypress: 1.5, selenium: 1.5, playwright: 1.5` em `tecnologias`, para a nota refletir QA |
-| Parar de receber sênior de vez | Já é o padrão: palavras de sênior em `senioridade_excluida` |
-| Aceitar uma stack que hoje é bloqueada (ex.: Java) | Tire a palavra de `palavras_bloqueadas_stack`. Se só quer ser avisado, deixe lá: com Júnior no título ela passa com ressalvas |
-| Aceitar Angular | Acrescente `, angular: 1.5` em `tecnologias` |
-
-## Limitações
-- A nota é por palavra-chave e anos de experiência citados, não por IA. Dá para trocar por um nó de LLM depois.
-- A memória de vagas já enviadas (deduplicação) só persiste com o workflow **ativo**. Em execuções manuais ela não é salva, então testes repetidos vão repetir vagas.
-- As fontes internacionais têm poucas vagas júnior; em testes com dados reais de 23/10/2026 nenhuma passou no filtro. O volume deve vir dos e-mails.
-- Remotive e RemoteOK exigem citar a fonte e linkar a vaga original (o resumo já faz isso). Não republique as vagas em outro site.
-- O n8n local só roda com o PC ligado e o Docker aberto. O horário das 9h perdido não é recuperado pelo agendador, mas o gatilho "ao ligar o n8n" cobre isso quando o PC ligar. Os e-mails de alerta ficam esperando no Yahoo (lidos ou não): o gatilho do IMAP busca quando o n8n voltar e o aviso sai na hora (a confirmar com a caixa real).
-- O n8n sem fuso configurado usa UTC, então o cron das 9h pode disparar em outro horário e as horas das páginas saem trocadas. O `GENERIC_TIMEZONE` do `.env` resolve os dois.
+## 6. Melhorias futuras
+- **Rodar 24 h:** hospedar o n8n em uma máquina sempre ligada, para as buscas e os alertas não dependerem do meu PC estar ligado.
+- **IA para avaliar o encaixe:** usar um modelo de linguagem com o meu currículo para decidir se a vaga combina comigo, em vez de só regras por palavras. Seria um modelo local ou um resumo do perfil, sem dados pessoais, mantendo as regras atuais como primeiro filtro.
+- **Lista separada de estágios:** em vez de descartar, mostrar as vagas de estágio numa lista à parte na página, fora dos avisos do Discord.
